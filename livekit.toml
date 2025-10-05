@@ -2,10 +2,20 @@
 # This file tells LiveKit Cloud how to build and run your agent
 
 [project]
-# Project subdomain - found in your LiveKit Cloud project URL
-# Example: if your URL is wss://my-project-abc123.livekit.cloud
-# then subdomain = "my-project-abc123"
-# Run `lk project list` to see your projects and get the subdomain
+# ⚠️ REQUIRED: Replace {{YOUR_SUBDOMAIN}} with your actual LiveKit project subdomain
+#
+# How to get your subdomain:
+#   1. Run: lk project list
+#   2. Find your project in the list
+#   3. Copy the subdomain from the URL (the part before .livekit.cloud)
+#
+# Example:
+#   If URL is: wss://my-project-abc123.livekit.cloud
+#   Then subdomain = "my-project-abc123"
+#
+# Common error if not set:
+#   "project does not match agent subdomain [{{YOUR_SUBDOMAIN}}]"
+#
 subdomain = "{{YOUR_SUBDOMAIN}}"
 
 [build]

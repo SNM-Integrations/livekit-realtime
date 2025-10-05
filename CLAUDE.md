@@ -159,6 +159,21 @@ After deploying an agent:
 
 ## Common Issues
 
+### Issue: "project does not match agent subdomain [{{YOUR_SUBDOMAIN}}]"
+**Cause:** The `livekit.toml` file still has the template placeholder `{{YOUR_SUBDOMAIN}}` instead of your actual project subdomain.
+
+**Solution:**
+```bash
+# 1. Get your project subdomain
+lk project list
+
+# 2. Copy the subdomain from the URL (e.g., "my-project-abc123")
+# 3. Edit livekit.toml and replace {{YOUR_SUBDOMAIN}} with your subdomain
+subdomain = "my-project-abc123"
+```
+
+This is a **very common mistake** when creating new agents from the template. The livekit.toml file has detailed instructions - make sure to read them!
+
 ### Issue: First few seconds of greeting cut off
 **Solution:** Agent waits for SIP participant to connect before greeting. If still happening, check logs for timing.
 
