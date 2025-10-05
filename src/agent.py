@@ -302,6 +302,11 @@ async def end_call():
         return "Could not end call - no context available"
 
     logger.info("Function tool called to end call")
+
+    # Wait 3 seconds to allow the AI's goodbye message to finish speaking
+    # before shutting down the connection
+    await asyncio.sleep(3)
+
     # CRITICAL: ctx.shutdown() is NOT async - do not await it!
     ctx.shutdown(reason="Conversation completed")
     return "Call ended successfully"
