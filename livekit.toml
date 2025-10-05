@@ -15,7 +15,7 @@ requirements = "requirements.txt"
 
 [agent]
 # Display name for your agent in LiveKit Cloud dashboard
-name = "{{AGENT_NAME}}"
+name = "Robin's Personal Assistant"
 
 # Agent type - "voice" for phone/audio agents
 type = "voice"
