@@ -6,7 +6,7 @@
 # Example: if your URL is wss://my-project-abc123.livekit.cloud
 # then subdomain = "my-project-abc123"
 # Run `lk project list` to see your projects and get the subdomain
-subdomain = "{{YOUR_SUBDOMAIN}}"
+subdomain = "robin-d8vgyqc5"
 
 [build]
 # Python file to run (don't change unless you rename files)
