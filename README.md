@@ -92,6 +92,7 @@ lk agent create
 
 - **[AI_AGENT_CREATOR_GUIDE.md](AI_AGENT_CREATOR_GUIDE.md)** - Complete guide for AI assistants to create agents
 - **[config/agent.creation.md](config/agent.creation.md)** - Configuration template with examples
+- **[docs/SIP_INTEGRATION_BEST_PRACTICES.md](docs/SIP_INTEGRATION_BEST_PRACTICES.md)** - ⚠️ **CRITICAL:** Prevent phantom SIP billing with proper call termination
 
 ## 🎨 Customization Examples
 
@@ -158,6 +159,10 @@ language: "English"  # Supported: Svenska, English, Español, Français, Deutsch
 
 ### Deployment fails
 → Check subdomain in `livekit.toml` matches `lk project list` output
+
+### ⚠️ Excessive billing / Calls lasting hours
+→ **CRITICAL ISSUE:** See [docs/SIP_INTEGRATION_BEST_PRACTICES.md](docs/SIP_INTEGRATION_BEST_PRACTICES.md) for complete solution
+→ TL;DR: Use `ctx.shutdown()` instead of `delete_room()` + implement timeout protections
 
 ## 📖 Learn More
 

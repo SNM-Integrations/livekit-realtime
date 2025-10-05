@@ -141,6 +141,7 @@ After deployment:
 | Too many questions | Add "max 1-2 questions" to prompt |
 | Hangs up too early | Improve end_call criteria in prompt |
 | Wrong accent | Make sure voice matches language |
+| **⚠️ Excessive billing / Stuck calls** | **See [docs/SIP_INTEGRATION_BEST_PRACTICES.md](docs/SIP_INTEGRATION_BEST_PRACTICES.md)** |
 
 ---
 
