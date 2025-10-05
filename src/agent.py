@@ -261,10 +261,11 @@ Svara ALLTID på svenska och följ "en fråga i taget" principen."""
 
             # CRITICAL: Use ctx.shutdown() for proper SIP termination
             # This ensures SIP BYE signal is sent to Telnyx to prevent phantom billing
+            # NOTE: ctx.shutdown() is NOT async - do not await it!
             ctx = get_job_context()
             if ctx:
                 logger.info(f"Shutting down session: {ctx.room.name}")
-                await ctx.shutdown(reason="Call completed gracefully")
+                ctx.shutdown(reason="Call completed gracefully")
                 logger.info("Session shutdown successfully - SIP call terminated")
             else:
                 logger.warning("No job context available for shutdown")
@@ -273,28 +274,36 @@ Svara ALLTID på svenska och följ "en fråga i taget" principen."""
             logger.warning("Farewell message timed out, force terminating")
             ctx = get_job_context()
             if ctx:
-                await ctx.shutdown(reason="Farewell timeout")
+                ctx.shutdown(reason="Farewell timeout")
         except Exception as e:
             logger.error(f"Error during call termination: {e}")
             # Ensure call still ends even with errors
             try:
                 ctx = get_job_context()
                 if ctx:
-                    await ctx.shutdown(reason=f"Error cleanup: {str(e)[:50]}")
+                    ctx.shutdown(reason=f"Error cleanup: {str(e)[:50]}")
             except Exception as cleanup_error:
                 logger.error(f"Failed to cleanup call: {cleanup_error}")
 
 
 @function_tool
 async def end_call():
-    """ONLY call this when the conversation is completely finished - after you have collected all information, confirmed it with the caller, and said a proper goodbye. Do NOT call this after just getting the name."""
+    """
+    End the call AFTER saying a proper goodbye.
+
+    The AI should ALWAYS say a closing message before calling this function, such as:
+    - "I'll make sure [Owner] gets this information. Have a great day!"
+    - "Perfect, I'll pass this along to [Owner]. Thanks for calling!"
+
+    Do NOT call this immediately after getting information - say goodbye first!
+    """
     ctx = get_job_context()
     if ctx is None:
         return "Could not end call - no context available"
 
     logger.info("Function tool called to end call")
-    # CRITICAL: Use ctx.shutdown() instead of delete_room() for proper SIP termination
-    await ctx.shutdown(reason="Conversation completed")
+    # CRITICAL: ctx.shutdown() is NOT async - do not await it!
+    ctx.shutdown(reason="Conversation completed")
     return "Call ended successfully"
 
 
