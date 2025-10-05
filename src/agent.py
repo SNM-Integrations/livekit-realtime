@@ -117,8 +117,8 @@ class VoiceAssistant(Agent):
         # Call safety tracking
         self.call_start_time = time.time()
         self.last_activity_time = time.time()
-        self.max_call_duration = 600  # 10 minutes
-        self.inactivity_timeout = 30  # 30 seconds
+        self.max_call_duration = 600  # 10 minutes - hard cutoff to prevent runaway billing
+        self.inactivity_timeout = 45  # 45 seconds - end call after silence to prevent stuck SIP connections
         self.safety_monitor_task = None
 
         # Use custom prompt from config or fallback
@@ -259,33 +259,28 @@ Svara ALLTID på svenska och följ "en fråga i taget" principen."""
                 # Small delay to ensure audio transmission completes
                 await asyncio.sleep(1.0)
 
-            # Delete room for complete call termination (required for telephony)
+            # CRITICAL: Use ctx.shutdown() for proper SIP termination
+            # This ensures SIP BYE signal is sent to Telnyx to prevent phantom billing
             ctx = get_job_context()
             if ctx:
-                logger.info(f"Deleting room: {ctx.room.name}")
-                await ctx.api.room.delete_room(
-                    api.DeleteRoomRequest(room=ctx.room.name)
-                )
-                logger.info("Room deleted successfully - call terminated")
+                logger.info(f"Shutting down session: {ctx.room.name}")
+                await ctx.shutdown(reason="Call completed gracefully")
+                logger.info("Session shutdown successfully - SIP call terminated")
             else:
-                logger.warning("No job context available for room deletion")
+                logger.warning("No job context available for shutdown")
 
         except asyncio.TimeoutError:
             logger.warning("Farewell message timed out, force terminating")
             ctx = get_job_context()
             if ctx:
-                await ctx.api.room.delete_room(
-                    api.DeleteRoomRequest(room=ctx.room.name)
-                )
+                await ctx.shutdown(reason="Farewell timeout")
         except Exception as e:
             logger.error(f"Error during call termination: {e}")
             # Ensure call still ends even with errors
             try:
                 ctx = get_job_context()
                 if ctx:
-                    await ctx.api.room.delete_room(
-                        api.DeleteRoomRequest(room=ctx.room.name)
-                    )
+                    await ctx.shutdown(reason=f"Error cleanup: {str(e)[:50]}")
             except Exception as cleanup_error:
                 logger.error(f"Failed to cleanup call: {cleanup_error}")
 
@@ -298,9 +293,8 @@ async def end_call():
         return "Could not end call - no context available"
 
     logger.info("Function tool called to end call")
-    await ctx.api.room.delete_room(
-        api.DeleteRoomRequest(room=ctx.room.name)
-    )
+    # CRITICAL: Use ctx.shutdown() instead of delete_room() for proper SIP termination
+    await ctx.shutdown(reason="Conversation completed")
     return "Call ended successfully"
 
 
