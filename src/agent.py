@@ -458,9 +458,6 @@ async def entrypoint(ctx: JobContext):
 
     logger.info(f"Sending greeting: {greeting_message}")
 
-    # Send greeting with language-appropriate instruction
-    await asyncio.sleep(0.8)  # Small delay for audio pipeline
-
     # Language-specific greeting instructions
     greeting_instructions = {
         "Svenska": f"Säg hälsningen på svenska: '{greeting_message}' och vänta på svar.",
@@ -474,6 +471,8 @@ async def entrypoint(ctx: JobContext):
 
     instruction = greeting_instructions.get(language, f"Say the greeting: '{greeting_message}' and wait for response.")
 
+    # Send greeting
+    await asyncio.sleep(0.8)  # Small delay for audio pipeline
     greeting_handle = await session.generate_reply(instructions=instruction)
     logger.info("Greeting sent successfully")
 

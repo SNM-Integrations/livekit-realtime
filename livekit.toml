@@ -1,21 +1,5 @@
-# LiveKit Cloud Deployment Configuration
-# This file tells LiveKit Cloud how to build and run your agent
-
 [project]
-# Project subdomain - found in your LiveKit Cloud project URL
-# Example: if your URL is wss://my-project-abc123.livekit.cloud
-# then subdomain = "my-project-abc123"
-# Run `lk project list` to see your projects and get the subdomain
-subdomain = "{{YOUR_SUBDOMAIN}}"
-
-[build]
-# Python file to run (don't change unless you rename files)
-entrypoint = "src/agent.py"
-requirements = "requirements.txt"
+  subdomain = "rormontage-demo-ghbytzax"
 
 [agent]
-# Display name for your agent in LiveKit Cloud dashboard
-name = "{{AGENT_NAME}}"
-
-# Agent type - "voice" for phone/audio agents
-type = "voice"
+  id = "CA_2bR3X3nmWRum"
