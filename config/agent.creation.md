@@ -122,21 +122,21 @@ prompt: |
 # personality_traits: "calm, friendly, conversational, natural"
 # temperature: 0.9
 # first_message: >
-#   Hej du har kommit till Robin. Han kan inte svara just nu,
-#   men jag kan ta emot ditt ärende!
+#   Hej, {{OWNER_NAME}} kan tyvärr inte svara just nu. Jag är {{OWNER_POSSESSIVE}} assistent.
+#   Hur kan jag hjälpa dig idag?
 #
 # prompt: |
 #   See Template D in AI_AGENT_CREATOR_GUIDE.md for the complete
 #   intelligence-based framework. Replace all {{VARIABLES}} with:
 #
-#   {{OWNER_NAME}} → "Robin"
-#   {{OWNER_PRONOUN}} → "han"
-#   {{OWNER_PRONOUN_CAPITAL}} → "Han"
-#   {{OWNER_POSSESSIVE}} → "hans"
-#   {{OWNER_ROLE}} → "personliga assistent"
-#   {{BUSINESS_TYPE}} → "företag"
-#   {{BUSINESS_CONTEXT}} → "försäljning"
-#   {{MAIN_GOAL}} → "Ge Robin det perfekta meddelandet så han vet vad som hänt"
+#   {{OWNER_NAME}} → "Alex" (or your owner's name)
+#   {{OWNER_PRONOUN}} → "han" / "hon" / "hen"
+#   {{OWNER_PRONOUN_CAPITAL}} → "Han" / "Hon" / "Hen"
+#   {{OWNER_POSSESSIVE}} → "hans" / "hennes" / "hens"
+#   {{OWNER_ROLE}} → "personliga assistent" / "receptionist" / etc
+#   {{BUSINESS_TYPE}} → "företag" / "kontor" / "klinik"
+#   {{BUSINESS_CONTEXT}} → "försäljning" / "konsultation" / "service"
+#   {{MAIN_GOAL}} → "Ge {{OWNER_NAME}} det perfekta meddelandet så {{OWNER_PRONOUN}} vet vad som hänt"
 #   {{GOAL_STATEMENT}} → "Det perfekta meddelandet"
 #   {{PRIMARY_PURPOSES}} → "boka, ställa in, fråga, diskutera, etc"
 #   {{GOAL_VARIATIONS}} → [See Template D for examples]
@@ -145,7 +145,7 @@ prompt: |
 #   {{INTERACTION_TYPE_2}} → "Diskutera något"
 #   {{INTERACTION_PATTERN_2}} → "förklara behov/situation"
 #   {{INTERACTION_TYPE_3}} → "Ställa fråga"
-#   {{INTERACTION_PATTERN_3}} → "kan Robin..."
+#   {{INTERACTION_PATTERN_3}} → "kan {{OWNER_NAME}}..."
 #   {{LANGUAGE_INSTRUCTION}} → "Svara ALLTID på svenska och var naturlig och mänsklig i samtalet."
 #
 #   Customize the 8 scenarios with business-specific examples.

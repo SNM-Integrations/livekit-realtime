@@ -641,13 +641,13 @@ ALLTID säg något liknande innan du avslutar!
 ```
 
 **Variables to replace:**
-- `{{OWNER_NAME}}` - Owner's name (e.g., "Robin", "Maria")
+- `{{OWNER_NAME}}` - Owner's name (e.g., "Alex", "Maria", "Dr. Chen")
 - `{{OWNER_PRONOUN}}` - Owner pronoun ("han" for male, "hon" for female)
 - `{{OWNER_POSSESSIVE}}` - Owner possessive ("hans" for male, "hennes" for female)
 - `{{BUSINESS_CONTEXT}}` - Business-specific context (e.g., "försäljning", "projektet")
 
-**Example completed prompt for Robin (male owner, sales business):**
-- Replace `{{OWNER_NAME}}` → "Robin"
+**Example completed prompt (male owner, sales business):**
+- Replace `{{OWNER_NAME}}` → "Alex"
 - Replace `{{OWNER_PRONOUN}}` → "han"
 - Replace `{{OWNER_POSSESSIVE}}` → "hans"
 - Replace `{{BUSINESS_CONTEXT}}` → "försäljning"
@@ -1184,7 +1184,7 @@ Konsistens = professionellt.
 **Variables to replace:**
 
 **Core Identity:**
-- `{{OWNER_NAME}}` - Owner's name (e.g., "Robin", "Dr. Chen", "Maria")
+- `{{OWNER_NAME}}` - Owner's name (e.g., "Alex", "Dr. Chen", "Maria")
 - `{{OWNER_PRONOUN}}` - Lowercase pronoun ("han", "hon", "he", "she", "they")
 - `{{OWNER_PRONOUN_CAPITAL}}` - Capitalized pronoun ("Han", "Hon", "He", "She", "They")
 - `{{OWNER_POSSESSIVE}}` - Possessive pronoun ("hans", "hennes", "his", "her", "their")
@@ -1193,7 +1193,7 @@ Konsistens = professionellt.
 - `{{BUSINESS_CONTEXT}}` - Main business domain ("försäljning", "appointments", "reservations", "consulting")
 
 **Goal & Purpose:**
-- `{{MAIN_GOAL}}` - High-level goal statement (e.g., "Ge Robin det perfekta meddelandet så han vet vad som hänt")
+- `{{MAIN_GOAL}}` - High-level goal statement (e.g., "Ge {{OWNER_NAME}} det perfekta meddelandet så {{OWNER_PRONOUN}} vet vad som hänt")
 - `{{GOAL_STATEMENT}}` - The perfect outcome description (e.g., "Det perfekta meddelandet")
 - `{{PRIMARY_PURPOSES}}` - Common reasons for calling (e.g., "boka, ställa in, fråga, etc")
 - `{{GOAL_VARIATIONS}}` - 3-4 examples of how "perfect" changes per situation:
@@ -1226,15 +1226,15 @@ Konsistens = professionellt.
 **Language:**
 - `{{LANGUAGE_INSTRUCTION}}` - Language instruction (e.g., "Svara ALLTID på svenska och var naturlig och mänsklig i samtalet.")
 
-**Example completed prompt for Robin (Swedish sales consultant):**
-- `{{OWNER_NAME}}` → "Robin"
+**Example completed prompt (Swedish sales consultant):**
+- `{{OWNER_NAME}}` → "Alex"
 - `{{OWNER_PRONOUN}}` → "han"
 - `{{OWNER_PRONOUN_CAPITAL}}` → "Han"
 - `{{OWNER_POSSESSIVE}}` → "hans"
 - `{{OWNER_ROLE}}` → "personliga assistent"
 - `{{BUSINESS_TYPE}}` → "företag"
 - `{{BUSINESS_CONTEXT}}` → "försäljning"
-- `{{MAIN_GOAL}}` → "Ge Robin det perfekta meddelandet så han vet vad som hänt"
+- `{{MAIN_GOAL}}` → "Ge Alex det perfekta meddelandet så han vet vad som hänt"
 - `{{GOAL_STATEMENT}}` → "Det perfekta meddelandet"
 - `{{LANGUAGE_INSTRUCTION}}` → "Svara ALLTID på svenska och var naturlig och mänsklig i samtalet."
 
@@ -1282,7 +1282,7 @@ The core of Template D is teaching the AI **how to think**, not **what to say**.
 
 **❌ BAD - Script Example:**
 ```
-If caller says "I need to talk to Robin":
+If caller says "I need to talk to [Owner]":
 Say: "What is this regarding?"
 If they answer vaguely:
 Say: "Can you be more specific?"
@@ -1293,13 +1293,13 @@ Say: "Can you be more specific?"
 ```
 SCENARIO: Vague Request
 ────────────────────────────────────────────────────
-Vad du hör: "I need to talk to Robin"
+Vad du hör: "I need to talk to [Owner]"
 
 VAD DU LÄGGER MÄRKE TILL:
 • No context provided
 • Could be many reasons
 
-VAD ROBIN BEHÖVER:
+VAD [OWNER] BEHÖVER:
 • Who they are
 • What it's about (at least general topic)
 
