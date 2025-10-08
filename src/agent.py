@@ -302,8 +302,22 @@ async def end_call():
         return "Could not end call - no context available"
 
     logger.info("Function tool called to end call")
-    # CRITICAL: ctx.shutdown() is NOT async - do not await it!
-    ctx.shutdown(reason="Conversation completed")
+
+    # Wait 3 seconds to allow the AI's goodbye message to finish speaking
+    # before terminating the call. This prevents audio cutoff mid-sentence.
+    await asyncio.sleep(3)
+
+    # CRITICAL: Use delete_room() for proper SIP call termination.
+    # This ensures the SIP BYE signal is sent to your telephony provider (e.g., Telnyx)
+    # to properly close the connection and prevent phantom billing from stuck calls.
+    #
+    # DO NOT use ctx.shutdown() alone - it only closes the agent's connection,
+    # not the underlying SIP call, which can result in ongoing charges.
+    logger.info(f"Deleting room to end SIP call: {ctx.room.name}")
+    await ctx.api.room.delete_room(
+        api.DeleteRoomRequest(room=ctx.room.name)
+    )
+    logger.info("Room deleted - SIP call terminated successfully")
     return "Call ended successfully"
 
 
