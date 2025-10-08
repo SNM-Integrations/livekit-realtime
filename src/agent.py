@@ -259,14 +259,16 @@ Svara ALLTID på svenska och följ "en fråga i taget" principen."""
                 # Small delay to ensure audio transmission completes
                 await asyncio.sleep(1.0)
 
-            # CRITICAL: Use ctx.shutdown() for proper SIP termination
+            # CRITICAL: Use delete_room() for proper SIP termination
+            # ctx.shutdown() alone does NOT properly terminate SIP calls!
             # This ensures SIP BYE signal is sent to Telnyx to prevent phantom billing
-            # NOTE: ctx.shutdown() is NOT async - do not await it!
             ctx = get_job_context()
             if ctx:
-                logger.info(f"Shutting down session: {ctx.room.name}")
-                ctx.shutdown(reason="Call completed gracefully")
-                logger.info("Session shutdown successfully - SIP call terminated")
+                logger.info(f"Deleting room to end SIP call: {ctx.room.name}")
+                await ctx.api.room.delete_room(
+                    api.DeleteRoomRequest(room=ctx.room.name)
+                )
+                logger.info("Room deleted - SIP call terminated successfully")
             else:
                 logger.warning("No job context available for shutdown")
 
@@ -274,14 +276,22 @@ Svara ALLTID på svenska och följ "en fråga i taget" principen."""
             logger.warning("Farewell message timed out, force terminating")
             ctx = get_job_context()
             if ctx:
-                ctx.shutdown(reason="Farewell timeout")
+                logger.info(f"Force deleting room due to timeout: {ctx.room.name}")
+                await ctx.api.room.delete_room(
+                    api.DeleteRoomRequest(room=ctx.room.name)
+                )
+                logger.info("Room deleted after timeout")
         except Exception as e:
             logger.error(f"Error during call termination: {e}")
             # Ensure call still ends even with errors
             try:
                 ctx = get_job_context()
                 if ctx:
-                    ctx.shutdown(reason=f"Error cleanup: {str(e)[:50]}")
+                    logger.info(f"Force deleting room due to error: {ctx.room.name}")
+                    await ctx.api.room.delete_room(
+                        api.DeleteRoomRequest(room=ctx.room.name)
+                    )
+                    logger.info("Room deleted after error")
             except Exception as cleanup_error:
                 logger.error(f"Failed to cleanup call: {cleanup_error}")
 
