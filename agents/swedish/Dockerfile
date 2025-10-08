@@ -1,4 +1,4 @@
-# Dockerfile for English Agent (elsa-english)
+# Dockerfile for Swedish Agent (elsa-swedish)
 # syntax=docker/dockerfile:1
 
 ARG PYTHON_VERSION=3.13
@@ -34,7 +34,6 @@ RUN pip install --no-cache-dir .
 
 # Copy application files
 COPY agent.py ./
-COPY Prompts/ ./Prompts/
 
 # Set ownership
 RUN chown -R appuser:appuser /app
@@ -44,5 +43,5 @@ USER appuser
 # Pre-download models
 RUN python agent.py download-files
 
-# Run English agent
+# Run Swedish agent
 CMD ["python", "agent.py", "start"]
