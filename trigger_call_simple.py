@@ -103,8 +103,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Phone must be E.164 format (+467...)"}).encode())
                 return
 
-        # Select agent (use agent IDs, not names)
-        agent_name = "CA_uG7inqdgtPgQ" if country == "SE" else "CA_WjF7u2U7wd7A"
+        # Select agent (use agent NAMES from WorkerOptions, not agent IDs)
+        agent_name = "elsa-swedish" if country == "SE" else "elsa-english"
 
         # Trigger call
         try:

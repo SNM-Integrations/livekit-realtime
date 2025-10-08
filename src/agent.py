@@ -402,7 +402,7 @@ class ElsaAgent:
             llm=openai.realtime.RealtimeModel(
                 model="gpt-realtime",
                 voice="marin",
-                modalities=["text", "audio"],
+                modalities=["audio", "text"],  # FIXED: audio first for speech output
                 temperature=0.7,
                 turn_detection=TurnDetection(
                     type="server_vad",
@@ -411,7 +411,7 @@ class ElsaAgent:
                     silence_duration_ms=1800  # Increased for Swedish rhythm
                 ),
                 input_audio_transcription=InputAudioTranscription(
-                    model="gpt-4o-transcribe",
+                    model="whisper-1",  # FIXED: use whisper-1 like working template
                     language="sv",
                     prompt="""Swedish business call transcription for meeting booking with AI voice assistant demo
 
@@ -522,11 +522,63 @@ async def entrypoint(ctx: JobContext):
     # Store phone number in tracker
     tracker.phone_number = phone_number
 
-    # Create single agent
-    elsa = ElsaAgent(lead_name=lead_name, phone_number=phone_number)
+    # Load prompt instructions
+    prompt_file = "Prompts/swedish_agent_prompt.md"
+    try:
+        with open(prompt_file, 'r', encoding='utf-8') as f:
+            prompt_template = f.read()
 
-    # Create session
-    session = AgentSession()
+        # Extract prompt content (skip frontmatter if exists)
+        if "---" in prompt_template:
+            parts = prompt_template.split("---", 2)
+            if len(parts) >= 3:
+                prompt_template = parts[2].strip()
+
+        # Replace placeholders
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        current_datetime = datetime.now(ZoneInfo("Europe/Stockholm"))
+        swedish_days = {"Monday": "måndag", "Tuesday": "tisdag", "Wednesday": "onsdag",
+                       "Thursday": "torsdag", "Friday": "fredag", "Saturday": "lördag", "Sunday": "söndag"}
+        swedish_months = {"January": "januari", "February": "februari", "March": "mars",
+                         "April": "april", "May": "maj", "June": "juni", "July": "juli",
+                         "August": "augusti", "September": "september", "October": "oktober",
+                         "November": "november", "December": "december"}
+        day_swedish = swedish_days.get(current_datetime.strftime("%A"), current_datetime.strftime("%A"))
+        month_swedish = swedish_months.get(current_datetime.strftime("%B"), current_datetime.strftime("%B"))
+        current_date_str = f"{day_swedish} {current_datetime.day} {month_swedish} {current_datetime.year}"
+        current_time_str = current_datetime.strftime("%H:%M")
+
+        instructions = prompt_template.replace("{lead_name}", lead_name)
+        instructions = instructions.replace("{current_date}", current_date_str)
+        instructions = instructions.replace("{current_time}", current_time_str)
+        instructions = instructions.replace("{phone_number}", phone_number)
+
+        logger.info(f"✅ Loaded prompt from {prompt_file}")
+    except Exception as e:
+        logger.error(f"❌ Error loading prompt: {e}")
+        instructions = f"Du är Elsa från Finn AI. Du pratar med {lead_name}."
+
+    # Create session WITH LLM (working template pattern)
+    session = AgentSession(
+        llm=openai.realtime.RealtimeModel(
+            model="gpt-realtime",
+            voice="marin",
+            modalities=["audio", "text"],
+            temperature=0.7,
+            input_audio_transcription=InputAudioTranscription(
+                model="whisper-1",
+                language="sv",
+                prompt="Svenska konversation med AI-assistent Elsa"
+            )
+        )
+    )
+
+    # Create agent with instructions and tools ONLY (NO llm)
+    agent = Agent(
+        instructions=instructions,
+        tools=[check_availability, end_call]
+    )
 
     # Event handlers
     @session.on("conversation_item_added")
@@ -565,7 +617,19 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(send_completion_webhook)
 
     # Start session
-    await session.start(room=ctx.room, agent=elsa.agent)
+    await session.start(room=ctx.room, agent=agent)
+
+    # Wait 0.5s for SIP participant to be fully ready before greeting
+    logger.info("⏳ Waiting 0.5s for SIP participant to be ready...")
+    await asyncio.sleep(0.5)
+
+    # Send greeting after delay
+    greeting = f"Hej, jag heter Elsa från Finn AI. Pratar jag med {lead_name}?"
+    logger.info(f"👋 Sending greeting: {greeting}")
+    await session.generate_reply(
+        instructions=f"Säg hälsningen på svenska: '{greeting}' och vänta på svar."
+    )
+    logger.info("✅ Greeting sent")
 
     # Start recording if enabled
     egress_id = None
@@ -649,53 +713,8 @@ async def entrypoint(ctx: JobContext):
 
             asyncio.create_task(cleanup_room())
 
-    # Wait for SIP participant's audio track to be ready before greeting
-    # This ensures the caller can hear the full greeting
-    sip_track_ready = asyncio.Event()
-    greeting_sent = False
-
-    @ctx.room.on("track_subscribed")
-    def on_track_subscribed(
-        track: rtc.Track,
-        publication: rtc.RemoteTrackPublication,
-        participant: rtc.RemoteParticipant
-    ):
-        nonlocal greeting_sent
-
-        logger.info(f"🎵 Track subscribed: {track.kind} from {participant.identity} (kind: {participant.kind})")
-
-        # Check if this is an audio track from a SIP participant
-        if (participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP and
-            track.kind == rtc.TrackKind.KIND_AUDIO and
-            not greeting_sent):
-            logger.info("✅ SIP participant audio track ready - triggering greeting!")
-            sip_track_ready.set()
-
-    # Wait for SIP participant's audio track (max 10 seconds timeout)
-    try:
-        await asyncio.wait_for(sip_track_ready.wait(), timeout=10.0)
-        logger.info("📞 SIP audio track ready, waiting 500ms for audio path stabilization")
-
-        # Small delay to ensure audio path is fully established
-        await asyncio.sleep(0.5)
-
-        greeting_sent = True
-        greeting = f"Hej, jag heter Elsa från Finn AI. Pratar jag med {lead_name}?"
-        logger.info(f"👋 Sending greeting: {greeting}")
-
-        await session.generate_reply(
-            instructions=f"Säg EXAKT denna hälsning på svenska: '{greeting}'. Säg INGET annat."
-        )
-
-        logger.info("✅ Greeting sent. Natural conversation flow active.")
-
-    except asyncio.TimeoutError:
-        logger.warning("⏱️ Timeout waiting for SIP audio track - sending greeting anyway")
-        greeting_sent = True
-        greeting = f"Hej, jag heter Elsa från Finn AI. Pratar jag med {lead_name}?"
-        await session.generate_reply(
-            instructions=f"Säg EXAKT denna hälsning på svenska: '{greeting}'. Säg INGET annat."
-        )
+    # NOTE: Greeting is now sent immediately after session.start (see above)
+    # Old track_subscribed waiting pattern removed - caused delays and silence
 
 
 if __name__ == "__main__":
