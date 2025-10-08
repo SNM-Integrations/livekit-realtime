@@ -4,8 +4,8 @@ workflow_type: "single_agent"
 personality_traits: "calm, friendly, conversational, natural"
 
 first_message: >
-  Hej, du har kommit fram till Robin. Han kan inte svara just nu,
-  men jag kan ta emot ett meddelande åt honom.
+  Hej du har kommit till Robin. Han kan inte svara just nu,
+  men jag kan ta emot ditt ärende!
 
 use_prerecorded_greeting: false
 
