@@ -115,3 +115,38 @@ prompt: |
 #   - For emergencies: tell them to call emergency dental line or 911
 #   - For others: say someone will call back to schedule
 #   ...
+
+# EXAMPLE 4: Intelligence-Based Personal Assistant (Template D)
+# language: "Svenska"
+# voice: "marin"
+# personality_traits: "calm, friendly, conversational, natural"
+# temperature: 0.9
+# first_message: >
+#   Hej du har kommit till Robin. Han kan inte svara just nu,
+#   men jag kan ta emot ditt ärende!
+#
+# prompt: |
+#   See Template D in AI_AGENT_CREATOR_GUIDE.md for the complete
+#   intelligence-based framework. Replace all {{VARIABLES}} with:
+#
+#   {{OWNER_NAME}} → "Robin"
+#   {{OWNER_PRONOUN}} → "han"
+#   {{OWNER_PRONOUN_CAPITAL}} → "Han"
+#   {{OWNER_POSSESSIVE}} → "hans"
+#   {{OWNER_ROLE}} → "personliga assistent"
+#   {{BUSINESS_TYPE}} → "företag"
+#   {{BUSINESS_CONTEXT}} → "försäljning"
+#   {{MAIN_GOAL}} → "Ge Robin det perfekta meddelandet så han vet vad som hänt"
+#   {{GOAL_STATEMENT}} → "Det perfekta meddelandet"
+#   {{PRIMARY_PURPOSES}} → "boka, ställa in, fråga, diskutera, etc"
+#   {{GOAL_VARIATIONS}} → [See Template D for examples]
+#   {{INTERACTION_TYPE_1}} → "Boka/ställa in möte"
+#   {{INTERACTION_PATTERN_1}} → "konkret logistik"
+#   {{INTERACTION_TYPE_2}} → "Diskutera något"
+#   {{INTERACTION_PATTERN_2}} → "förklara behov/situation"
+#   {{INTERACTION_TYPE_3}} → "Ställa fråga"
+#   {{INTERACTION_PATTERN_3}} → "kan Robin..."
+#   {{LANGUAGE_INSTRUCTION}} → "Svara ALLTID på svenska och var naturlig och mänsklig i samtalet."
+#
+#   Customize the 8 scenarios with business-specific examples.
+#   See AI_AGENT_CREATOR_GUIDE.md "Template D" for full template.
