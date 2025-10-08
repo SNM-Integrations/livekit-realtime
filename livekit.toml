@@ -16,7 +16,7 @@
 # Common error if not set:
 #   "project does not match agent subdomain [{{YOUR_SUBDOMAIN}}]"
 #
-subdomain = "{{YOUR_SUBDOMAIN}}"
+subdomain = "snm-zzc8jbxg"
 
 [build]
 # Python file to run (don't change unless you rename files)
@@ -37,7 +37,7 @@ requirements = "requirements.txt"
 id = ""
 
 # Display name for your agent in LiveKit Cloud dashboard
-name = "{{AGENT_NAME}}"
+name = "Samuel's Personal Assistant"
 
 # Agent type - "voice" for phone/audio agents
 type = "voice"
