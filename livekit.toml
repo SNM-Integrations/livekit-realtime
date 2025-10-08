@@ -14,6 +14,9 @@ entrypoint = "src/agent.py"
 requirements = "requirements.txt"
 
 [agent]
+# Agent ID from LiveKit Cloud (auto-generated when you run `lk agent create`)
+id = "CA_EDm9tb8ketTH"
+
 # Display name for your agent in LiveKit Cloud dashboard
 name = "Robin's Personal Assistant"
 
