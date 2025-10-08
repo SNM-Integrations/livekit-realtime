@@ -1,43 +1,5 @@
-# LiveKit Cloud Deployment Configuration
-# This file tells LiveKit Cloud how to build and run your agent
-
 [project]
-# ⚠️ REQUIRED: Replace {{YOUR_SUBDOMAIN}} with your actual LiveKit project subdomain
-#
-# How to get your subdomain:
-#   1. Run: lk project list
-#   2. Find your project in the list
-#   3. Copy the subdomain from the URL (the part before .livekit.cloud)
-#
-# Example:
-#   If URL is: wss://my-project-abc123.livekit.cloud
-#   Then subdomain = "my-project-abc123"
-#
-# Common error if not set:
-#   "project does not match agent subdomain [{{YOUR_SUBDOMAIN}}]"
-#
-subdomain = "snm-zzc8jbxg"
-
-[build]
-# Python file to run (don't change unless you rename files)
-entrypoint = "src/agent.py"
-requirements = "requirements.txt"
+  subdomain = "samuels-agent-qyhykxsz"
 
 [agent]
-# Agent ID - automatically generated after running `lk agent create`
-# Leave this empty initially. After creating your agent, add the ID here
-# to enable deployment updates with `lk agent deploy`
-#
-# How to get your agent ID:
-#   1. After running `lk agent create`, copy the agent ID from the output
-#   2. Or run: lk agent list
-#   3. Paste the ID here (format: CA_xxxxxxxxxxxxx)
-#
-# Example: id = "CA_EDm9tb8ketTH"
-id = ""
-
-# Display name for your agent in LiveKit Cloud dashboard
-name = "Samuel's Personal Assistant"
-
-# Agent type - "voice" for phone/audio agents
-type = "voice"
+  id = "CA_D2afUdz6tWGt"
