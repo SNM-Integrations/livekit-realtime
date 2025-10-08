@@ -2,6 +2,36 @@
 
 This template allows you to create custom voice agents by simply describing what you want. An AI (like Claude Code) can read this guide and generate a complete, working agent from just a few sentences.
 
+## Quick Reference (For Experienced Users)
+
+**Minimum steps to deploy:**
+```bash
+# 1. Setup environment
+cp .env.example .env
+# Edit .env with LiveKit & OpenAI credentials
+
+# 2. Get subdomain
+lk project list  # Copy subdomain from output
+
+# 3. Configure files
+# - Edit config/agent.creation.md (choose template, fill variables)
+# - Edit livekit.toml (add subdomain, agent name)
+
+# 4. Create & deploy
+lk agent create  # Copy agent ID from output
+# Add agent ID to livekit.toml
+lk agent deploy
+
+# 5. Test
+lk agent logs <agent-id>
+```
+
+**Files to modify:** `config/agent.creation.md`, `livekit.toml`, `.env`
+
+**See below for:** Complete setup guide, template selection, prompting best practices
+
+---
+
 ## Quick Create Format
 
 To create an agent, provide this information:
@@ -129,9 +159,69 @@ Before creating your agent, determine which prompt template fits your use case:
 
 **Pro Tip:** Start with A/B/C for simpler needs. Graduate to Template D when you notice callers have very different needs and rigid approaches cause frustration.
 
-## Files to Modify
+## Complete Setup Guide
 
-When creating an agent from the template, modify these files:
+### Prerequisites
+
+Before creating an agent, you need:
+
+1. **LiveKit Cloud Account** - Sign up at https://cloud.livekit.io
+2. **OpenAI API Key** - Get from https://platform.openai.com/api-keys
+3. **LiveKit CLI** - Install: `brew install livekit-cli` (Mac) or see https://docs.livekit.io/home/cli/
+
+### Step-by-Step Setup
+
+#### Step 1: Get LiveKit Credentials
+
+1. Go to https://cloud.livekit.io
+2. Select your project (or create one)
+3. Go to **Settings** → **Keys**
+4. Copy these three values:
+   - **URL** (e.g., `wss://your-project-abc123.livekit.cloud`)
+   - **API Key** (e.g., `APIxxxxx`)
+   - **API Secret** (keep this secret!)
+
+#### Step 2: Get LiveKit Project Subdomain
+
+Run this command:
+```bash
+lk project list
+```
+
+You'll see output like:
+```
+┌──────────┬──────────────────────────────────────────┬─────────────┐
+│ Name     │ URL                                      │ API Key     │
+├──────────┼──────────────────────────────────────────┼─────────────┤
+│ * myproj │ wss://myproj-abc123.livekit.cloud        │ APIxxxxx    │
+└──────────┴──────────────────────────────────────────┴─────────────┘
+```
+
+The subdomain is the part before `.livekit.cloud` → `myproj-abc123`
+
+#### Step 3: Set Up Environment Variables
+
+1. Copy the example file:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit `.env` with your credentials:
+   ```bash
+   # LiveKit Configuration
+   LIVEKIT_URL=wss://your-project-abc123.livekit.cloud
+   LIVEKIT_API_KEY=APIxxxxxxxxxxxxx
+   LIVEKIT_API_SECRET=your_secret_here
+
+   # OpenAI Configuration
+   OPENAI_API_KEY=sk-xxxxxxxxxxxxx
+   ```
+
+**⚠️ IMPORTANT:** Never commit `.env` to git! It's in `.gitignore` by default.
+
+#### Step 4: Configure Agent Files
+
+Now modify these files to create your agent:
 
 ### 1. `config/agent.creation.md`
 Replace these template variables:
@@ -149,13 +239,68 @@ Replace these template variables:
 
 ### 2. `livekit.toml`
 Replace:
-- `{{YOUR_SUBDOMAIN}}` → Get from `lk project list`
+- `{{YOUR_SUBDOMAIN}}` → Use subdomain from Step 2 (e.g., "myproj-abc123")
 - `{{AGENT_NAME}}` → Display name like "Robert's Assistant" or "Bella Vista Reservations"
 
-### 3. `.env`
-Copy from `.env.example` and fill in:
-- `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (from LiveKit Cloud)
-- `OPENAI_API_KEY` (from OpenAI)
+**Example:**
+```toml
+[project]
+subdomain = "myproj-abc123"
+
+[agent]
+id = ""  # Leave empty for now
+name = "Robert's Assistant"
+type = "voice"
+```
+
+#### Step 5: Create and Deploy Agent
+
+1. **Create the agent** (run from project root):
+   ```bash
+   lk agent create
+   ```
+
+   - Select **Yes** when prompted for your project
+   - Copy the agent ID from the output (format: `CA_xxxxxxxxxxxxx`)
+
+2. **Add agent ID to `livekit.toml`:**
+   ```toml
+   [agent]
+   id = "CA_xxxxxxxxxxxxx"  # Paste your actual agent ID
+   ```
+
+3. **Deploy the agent:**
+   ```bash
+   lk agent deploy
+   ```
+
+4. **Verify deployment:**
+   ```bash
+   lk agent list
+   ```
+
+#### Step 6: Test Your Agent
+
+After deployment, you can:
+- View logs: `lk agent logs <agent-id>`
+- Test via SIP call (if configured)
+- Check LiveKit Cloud dashboard
+
+## Common Issues
+
+**"project does not match agent subdomain"**
+- → Make sure `subdomain` in `livekit.toml` matches your project subdomain exactly
+
+**"OPENAI_API_KEY not found"**
+- → Check that `.env` file exists and contains your OpenAI API key
+- → Make sure you're running commands from the project root directory
+
+**"Cannot connect to LiveKit"**
+- → Verify `LIVEKIT_URL` in `.env` is correct (should start with `wss://`)
+- → Check that API credentials are valid
+
+**Agent creation times out**
+- → The CLI prompt requires manual selection - choose "Yes" when asked
 
 ## System Prompt Templates
 
