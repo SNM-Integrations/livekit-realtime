@@ -4,8 +4,7 @@ workflow_type: "single_agent"
 personality_traits: "calm, friendly, conversational, natural"
 
 first_message: >
-  Hej, Robin kan tyvärr inte svara just nu. Jag är hans assistent.
-  Hur kan jag hjälpa dig idag?
+  Tjena, Robin kan tyvärr inte svara just nu. Kan jag ta ett meddelande?
 
 use_prerecorded_greeting: false
 
