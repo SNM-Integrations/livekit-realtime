@@ -33,7 +33,7 @@ COPY pyproject.toml ./
 RUN pip install --no-cache-dir .
 
 # Copy application files
-COPY agent.py ./
+COPY src/agent.py ./
 COPY Prompts/ ./Prompts/
 
 # Set ownership

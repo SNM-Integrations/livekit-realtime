@@ -203,6 +203,103 @@ async def check_availability(
 
 
 # ============================================================================
+# PROFIT MEDIA MEETING BOOKER - BOOK CONFIRMED MEETINGS
+# ============================================================================
+
+PROFIT_MEDIA_BOOKING_WEBHOOK = "https://snmnils.app.n8n.cloud/webhook/profit-media-booking"
+
+@function_tool
+async def profit_media_meeting_booker(
+    context: RunContext,
+    customer_name: str,
+    phone_number: str,
+    meeting_datetime: str,
+    service_interest: str,
+    notes: str = ""
+) -> dict[str, Any]:
+    """
+    Book a meeting for Profit Media after customer has confirmed the time.
+
+    IMPORTANT: Only call this function AFTER the customer has explicitly agreed to a specific time.
+    Do NOT call this to check availability - use check_availability for that.
+
+    Args:
+        customer_name: Full name of the customer
+        phone_number: Customer's phone number
+        meeting_datetime: Confirmed meeting time in ISO 8601 format (e.g., "2025-10-15T14:00:00.000+02:00")
+        service_interest: Which service(s) they're interested in (SEO, Google Ads, Webbutveckling, Meta-annonsering, Review Booster)
+        notes: Any additional notes from the conversation (pain points, previous attempts, goals)
+
+    Returns:
+        Dictionary confirming the booking was successful
+
+    USAGE: After customer agrees to a time slot, call this to finalize the booking.
+    Example: "Perfekt! Jag bokar in dig för [tid]" → call this function
+    """
+    logger.info(f"📅 Booking Profit Media meeting for {customer_name} at {meeting_datetime}")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "customer_name": customer_name,
+                "phone_number": phone_number,
+                "meeting_datetime": meeting_datetime,
+                "service_interest": service_interest,
+                "notes": notes,
+                "booked_at": datetime.now(ZoneInfo("Europe/Stockholm")).isoformat(),
+                "agent": "Carolina - Profit Media"
+            }
+
+            headers = {
+                "Content-Type": "application/json"
+            }
+
+            logger.debug(f"📤 Sending booking to webhook: {payload}")
+
+            async with session.post(
+                PROFIT_MEDIA_BOOKING_WEBHOOK,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                response_text = await resp.text()
+                logger.debug(f"📥 Booking webhook response: {resp.status} - {response_text[:200]}")
+
+                if resp.status == 200:
+                    logger.info(f"✅ Meeting booked successfully for {customer_name}")
+                    return {
+                        "success": True,
+                        "message": f"Meeting booked for {customer_name} at {meeting_datetime}",
+                        "booking_confirmed": True
+                    }
+                else:
+                    logger.error(f"❌ Booking webhook error: {resp.status} - {response_text[:200]}")
+                    return {
+                        "success": False,
+                        "error": f"http_{resp.status}",
+                        "message": "Could not confirm booking - please note manually",
+                        "booking_confirmed": False
+                    }
+
+    except asyncio.TimeoutError:
+        logger.error("⏱️ Booking webhook timeout")
+        return {
+            "success": False,
+            "error": "timeout",
+            "message": "Booking system slow - please note manually",
+            "booking_confirmed": False
+        }
+    except Exception as e:
+        logger.error(f"❌ Error booking meeting: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Could not confirm booking - please note manually",
+            "booking_confirmed": False
+        }
+
+
+# ============================================================================
 # END CALL FUNCTION TOOL - PROPER SIP TERMINATION
 # ============================================================================
 
@@ -371,7 +468,7 @@ class ElsaAgent:
         logger.info(f"📅 Agent created with date: {current_date_str} {current_time_str}")
 
         # Load prompt from file
-        prompt_file = "Prompts/swedish_agent_prompt.md"
+        prompt_file = "Prompts/carolina_agent_prompt.md"
         try:
             with open(prompt_file, 'r', encoding='utf-8') as f:
                 prompt_template = f.read()
@@ -429,7 +526,7 @@ Instruction: Transcribe with high accuracy, interpret phonetic spelling contextu
                 )
             ),
             # Register function tools: calendar checking and call ending
-            tools=[check_availability, end_call]
+            tools=[check_availability, profit_media_meeting_booker, end_call]
         )
 
         logger.info(f"🤖 Elsa agent initialized (Swedish) for {self.lead_name}")
@@ -523,7 +620,7 @@ async def entrypoint(ctx: JobContext):
     tracker.phone_number = phone_number
 
     # Load prompt instructions
-    prompt_file = "Prompts/swedish_agent_prompt.md"
+    prompt_file = "Prompts/carolina_agent_prompt.md"
     try:
         with open(prompt_file, 'r', encoding='utf-8') as f:
             prompt_template = f.read()
@@ -557,7 +654,7 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"✅ Loaded prompt from {prompt_file}")
     except Exception as e:
         logger.error(f"❌ Error loading prompt: {e}")
-        instructions = f"Du är Elsa från Finn AI. Du pratar med {lead_name}."
+        instructions = f"Du är Carolina från Profit Media. Du pratar med {lead_name}."
 
     # Create session WITH LLM (working template pattern)
     session = AgentSession(
@@ -569,7 +666,7 @@ async def entrypoint(ctx: JobContext):
             input_audio_transcription=InputAudioTranscription(
                 model="whisper-1",
                 language="sv",
-                prompt="Svenska konversation med AI-assistent Elsa"
+                prompt="Svenska konversation med AI-assistent Carolina från Profit Media"
             )
         )
     )
@@ -577,7 +674,7 @@ async def entrypoint(ctx: JobContext):
     # Create agent with instructions and tools ONLY (NO llm)
     agent = Agent(
         instructions=instructions,
-        tools=[check_availability, end_call]
+        tools=[check_availability, profit_media_meeting_booker, end_call]
     )
 
     # Event handlers
@@ -607,7 +704,7 @@ async def entrypoint(ctx: JobContext):
             "agent_name": "elsa-swedish",
             "voice": "marin",
             "language": "sv",
-            "prompt_file": "Prompts/swedish_agent_prompt.md",
+            "prompt_file": "Prompts/carolina_agent_prompt.md",
             "lead_name_extracted": lead_name,
             "phone_number_extracted": phone_number
         }
@@ -624,7 +721,7 @@ async def entrypoint(ctx: JobContext):
     await asyncio.sleep(0.5)
 
     # Send greeting after delay
-    greeting = f"Hej, jag heter Elsa från Finn AI. Pratar jag med {lead_name}?"
+    greeting = f"Hej {lead_name}, det är Carolina från Profit Media. Passar det att prata nu?"
     logger.info(f"👋 Sending greeting: {greeting}")
     await session.generate_reply(
         instructions=f"Säg hälsningen på svenska: '{greeting}' och vänta på svar."
