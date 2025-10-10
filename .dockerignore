@@ -1,0 +1,30 @@
+# Exclude development and test files
+test/
+tests/
+eval/
+evals/
+
+# Exclude environment files
+.env
+.env.*
+
+# Exclude git and IDE files
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Exclude Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Exclude logs
+*.log
+logs/
+
+# IMPORTANT: Do NOT exclude Prompts/ - we need it in the container!
+# Prompts/ should be included by default with COPY . .

@@ -3,19 +3,25 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ai-phone-agent"
-version = "0.1.0"
-description = "A real-time voice assistant using LiveKit and OpenAI GPT-Realtime"
+name = "livekit-agent-template"
+version = "1.0.0"
+description = "Enterprise-grade template system for creating LiveKit voice agents with workflows"
 requires-python = ">=3.9"
 dependencies = [
     "livekit-agents[openai]~=1.2",
     "python-dotenv~=1.0",
-    "uvicorn~=0.30"
+    "pyyaml~=6.0",
+    "aiohttp~=3.9",
 ]
 
 [project.optional-dependencies]
 dev = [
     "black",
     "isort",
-    "flake8"
+    "flake8",
+    "pytest",
+    "pytest-asyncio"
 ]
+
+[project.scripts]
+create-agent = "scripts.create_agent:main"

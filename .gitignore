@@ -25,19 +25,46 @@ MANIFEST
 .env
 .env.local
 .venv
+env/
 venv/
 ENV/
-env/
+env.bak/
+venv.bak/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# Logs
+# LiveKit
 *.log
+logs/
+
+# Generated agents (examples)
+examples/*/
+demo-agent/
+*-agent/
+!robert-agent/
+!template/
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+
+# Audio files (except templates)
+*.wav
+*.mp3
+*.m4a
+!assets/greetings/.gitkeep
+
+# Temporary files
+tmp/
+temp/
+*.tmp
