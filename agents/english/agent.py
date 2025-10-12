@@ -391,8 +391,30 @@ class ElsaAgent:
 
         logger.info(f"📅 Agent created with date: {current_date_str} {current_time_str}")
 
-        # System prompt - ENGINEERED V1 - 2025-10-06
-        instructions = f"""
+        # Load prompt from file - Carolina from Profit Media
+        prompt_file = "../../Prompts/carolina_agent_prompt.md"
+        try:
+            with open(prompt_file, 'r', encoding='utf-8') as f:
+                prompt_template = f.read()
+
+            # Extract just the prompt content (skip the header if it exists)
+            if "---" in prompt_template:
+                parts = prompt_template.split("---", 2)
+                if len(parts) >= 3:
+                    prompt_template = parts[2].strip()
+
+            # Replace placeholders
+            instructions = prompt_template.replace("{lead_name}", self.lead_name)
+            instructions = instructions.replace("{current_date}", current_date_str)
+            instructions = instructions.replace("{current_time}", current_time_str)
+            instructions = instructions.replace("{phone_number}", self.phone_number)
+
+            logger.info(f"✅ Loaded prompt from {prompt_file}")
+
+        except FileNotFoundError:
+            logger.error(f"❌ Prompt file not found: {prompt_file}")
+            # Fallback to inline prompt
+            instructions = f"""
 # ROLE & OBJECTIVE
 
 Du är Elsa, mötesbokare från Finn AI. Du ringer {self.lead_name} som 30 sekunder sedan fyllde i formulär för att testa AI-röstassistenter.
@@ -847,7 +869,7 @@ async def entrypoint(ctx: JobContext):
         logger.info("📞 SIP audio track ready, sending greeting now")
 
         greeting_sent = True
-        greeting = f"Hejsan, mitt namn är Elsa från Finn AI, har jag kommit fram till {lead_name}?"
+        greeting = f"Hej {lead_name}, det är Carolina från Profit Media. Passar det att prata nu?"
         logger.info(f"👋 Sending greeting: {greeting}")
 
         await session.generate_reply(
@@ -859,7 +881,7 @@ async def entrypoint(ctx: JobContext):
     except asyncio.TimeoutError:
         logger.warning("⏱️ Timeout waiting for SIP audio track - sending greeting anyway")
         greeting_sent = True
-        greeting = f"Hejsan, mitt namn är Elsa från Finn AI, har jag kommit fram till {lead_name}?"
+        greeting = f"Hej {lead_name}, det är Carolina från Profit Media. Passar det att prata nu?"
         await session.generate_reply(
             instructions=f"Säg EXAKT denna hälsning på svenska: '{greeting}'. Säg INGET annat."
         )
@@ -868,5 +890,5 @@ async def entrypoint(ctx: JobContext):
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(
         entrypoint_fnc=entrypoint,
-        agent_name="elsa-swedish"
+        agent_name="elsa-english"
     ))

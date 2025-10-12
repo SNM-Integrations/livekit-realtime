@@ -20,7 +20,7 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 SIP_TRUNK_ID = os.getenv("OUTBOUND_SIP_TRUNK_ID")
 
 
-async def create_outbound_call(lead_name: str, phone_number: str, agent_name: str = "elsa-swedish"):
+async def create_outbound_call(lead_name: str, phone_number: str, agent_name: str = "elsa-swedish", language: str = "English"):
     """Trigger LiveKit outbound call"""
 
     lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
@@ -34,7 +34,8 @@ async def create_outbound_call(lead_name: str, phone_number: str, agent_name: st
             room=room_name,
             metadata=json.dumps({
                 "lead_name": lead_name,
-                "phone_number": phone_number
+                "phone_number": phone_number,
+                "language": language
             })
         )
     )
@@ -82,7 +83,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         lead_name = data.get('name')
         phone_number = data.get('phone')
-        country = data.get('country', 'SE')
+        # Accept 'language' parameter: "English", "Swedish", or "Carolina"
+        # Fallback to 'country' for backward compatibility
+        language = data.get('language', data.get('country', 'English'))
 
         # Validate
         if not lead_name or not phone_number:
@@ -94,7 +97,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         # Ensure E.164 format
         if not phone_number.startswith('+'):
-            if country == 'SE' and phone_number.startswith('07'):
+            # Auto-format Swedish numbers if language is Swedish or legacy country is SE
+            if (language == 'Swedish' or language == 'SE') and phone_number.startswith('07'):
                 phone_number = '+46' + phone_number[1:]
             else:
                 self.send_response(400)
@@ -103,12 +107,18 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Phone must be E.164 format (+467...)"}).encode())
                 return
 
-        # Single agent setup - always use elsa-swedish (country parameter ignored)
-        agent_name = "elsa-swedish"
+        # Agent selection based on language parameter
+        # "Carolina" → elsa-english (Swedish Carolina Profit Media agent)
+        # "English" or "Swedish" → elsa-swedish (Finn AI bilingual agent)
+        # Backward compatibility: "SE" → elsa-swedish
+        if language == "Carolina":
+            agent_name = "elsa-english"
+        else:
+            agent_name = "elsa-swedish"
 
         # Trigger call
         try:
-            result = asyncio.run(create_outbound_call(lead_name, phone_number, agent_name))
+            result = asyncio.run(create_outbound_call(lead_name, phone_number, agent_name, language))
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')

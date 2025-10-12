@@ -98,14 +98,14 @@ async def check_availability(
         while not tool_completed:
             update_count += 1
             try:
-                # Send conversational status update
+                # Send conversational status update (agent will speak in the correct language based on its instructions)
                 if update_count == 1:
                     await context.session.generate_reply(
-                        instructions="Say naturally in English that you're still checking the calendar, like 'I'm still checking' or 'just one more moment'"
+                        instructions="Say naturally that you're still checking the calendar, like 'I'm still checking' or 'just one more moment'"
                     )
                 elif update_count == 2:
                     await context.session.generate_reply(
-                        instructions="Say naturally in English that you're almost done, like 'I'm almost done' or 'just a few more seconds'"
+                        instructions="Say naturally that you're almost done, like 'I'm almost done' or 'just a few more seconds'"
                     )
                 # After 15 seconds total (3 updates), don't send more
                 if update_count >= 3:
@@ -467,8 +467,8 @@ class ElsaAgent:
 
         logger.info(f"📅 Agent created with date: {current_date_str} {current_time_str}")
 
-        # Load prompt from file
-        prompt_file = "Prompts/carolina_agent_prompt.md"
+        # Load prompt from file - CHANGED TO ENGLISH
+        prompt_file = "Prompts/english_agent_prompt.md"
         try:
             with open(prompt_file, 'r', encoding='utf-8') as f:
                 prompt_template = f.read()
@@ -509,18 +509,16 @@ class ElsaAgent:
                 ),
                 input_audio_transcription=InputAudioTranscription(
                     model="whisper-1",  # FIXED: use whisper-1 like working template
-                    language="sv",
-                    prompt="""Swedish business call transcription for meeting booking with AI voice assistant demo
+                    language="en",
+                    prompt="""English UK business call transcription for meeting booking with AI voice assistant demo
 
-Context: Swedish business call transcription for meeting booking with AI voice assistant demo
+Context: English UK business call transcription for meeting booking with AI voice assistant demo
 
-Common phonetic terms:
-- 'dubbel-v' means letter W (not v-v)
-- 'snabel-a' means @
-- Email addresses with Swedish names (common: Andersson, Nilsson, Lindström, Wallin, Vallin)
+Common elements:
+- Email addresses with British names (common: Smith, Jones, Williams, Brown, Taylor)
 - Times in 24-hour format (14:00, 10:30)
-- Days: måndag, tisdag, onsdag, torsdag, fredag
-- Business terminology: möte, demo, AI-röst, leads, kunder
+- Days: Monday, Tuesday, Wednesday, Thursday, Friday
+- Business terminology: meeting, demo, AI voice, leads, customers
 
 Instruction: Transcribe with high accuracy, interpret phonetic spelling contextually."""
                 )
@@ -529,7 +527,7 @@ Instruction: Transcribe with high accuracy, interpret phonetic spelling contextu
             tools=[check_availability, profit_media_meeting_booker, end_call]
         )
 
-        logger.info(f"🤖 Elsa agent initialized (Swedish) for {self.lead_name}")
+        logger.info(f"🤖 Elsa agent initialized (English) for {self.lead_name}")
 
 
 # ============================================================================
@@ -544,6 +542,16 @@ async def entrypoint(ctx: JobContext):
     logger.info("🚀 Finn AI Agent (Elsa) starting - SIMPLIFIED SINGLE-AGENT")
 
     await ctx.connect()
+
+    # Read language from metadata (default to English if not provided)
+    language = "English"  # Default
+    try:
+        if ctx.job.metadata:
+            metadata = json.loads(ctx.job.metadata)
+            language = metadata.get("language", "English")
+            logger.info(f"📝 Language from metadata: {language}")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not parse metadata, using default language (English): {e}")
 
     # Initialize tracking
     tracker = ConversationTracker()
@@ -619,8 +627,16 @@ async def entrypoint(ctx: JobContext):
     # Store phone number in tracker
     tracker.phone_number = phone_number
 
-    # Load prompt instructions
-    prompt_file = "Prompts/carolina_agent_prompt.md"
+    # Load prompt instructions - Dynamic based on language
+    if language == "Swedish":
+        prompt_file = "Prompts/swedish_agent_prompt.md"
+        transcription_language = "sv"
+    else:  # Default to English
+        prompt_file = "Prompts/english_agent_prompt.md"
+        transcription_language = "en"
+
+    logger.info(f"📄 Loading prompt file: {prompt_file} (language: {transcription_language})")
+
     try:
         with open(prompt_file, 'r', encoding='utf-8') as f:
             prompt_template = f.read()
@@ -654,9 +670,15 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"✅ Loaded prompt from {prompt_file}")
     except Exception as e:
         logger.error(f"❌ Error loading prompt: {e}")
-        instructions = f"Du är Carolina från Profit Media. Du pratar med {lead_name}."
+        instructions = f"You are Elsa from Finn AI. You're speaking with {lead_name}."
 
     # Create session WITH LLM (working template pattern)
+    # Set transcription prompt based on language
+    if transcription_language == "sv":
+        transcription_prompt = "Swedish business call transcription with AI assistant Elsa from Finn AI"
+    else:
+        transcription_prompt = "English conversation with AI assistant Elsa from Finn AI"
+
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(
             model="gpt-realtime",
@@ -665,8 +687,8 @@ async def entrypoint(ctx: JobContext):
             temperature=0.7,
             input_audio_transcription=InputAudioTranscription(
                 model="whisper-1",
-                language="sv",
-                prompt="Svenska konversation med AI-assistent Carolina från Profit Media"
+                language=transcription_language,
+                prompt=transcription_prompt
             )
         )
     )
@@ -703,8 +725,9 @@ async def entrypoint(ctx: JobContext):
         tracker.debug_logs = {
             "agent_name": "elsa-swedish",
             "voice": "marin",
-            "language": "sv",
-            "prompt_file": "Prompts/carolina_agent_prompt.md",
+            "language": transcription_language,
+            "language_param": language,
+            "prompt_file": prompt_file,
             "lead_name_extracted": lead_name,
             "phone_number_extracted": phone_number
         }
@@ -720,12 +743,16 @@ async def entrypoint(ctx: JobContext):
     logger.info("⏳ Waiting 0.5s for SIP participant to be ready...")
     await asyncio.sleep(0.5)
 
-    # Send greeting after delay
-    greeting = f"Hej {lead_name}, det är Carolina från Profit Media. Passar det att prata nu?"
+    # Send greeting after delay - Dynamic based on language
+    if language == "Swedish":
+        greeting = f"Hej {lead_name}, det är Elsa från Finn AI. Passar det att prata nu?"
+        greeting_instruction = f"Say this greeting in Swedish: '{greeting}' and wait for response."
+    else:  # English
+        greeting = f"Hi {lead_name}, this is Elsa from Finn AI. Is now a good time to talk?"
+        greeting_instruction = f"Say this greeting in English: '{greeting}' and wait for response."
+
     logger.info(f"👋 Sending greeting: {greeting}")
-    await session.generate_reply(
-        instructions=f"Säg hälsningen på svenska: '{greeting}' och vänta på svar."
-    )
+    await session.generate_reply(instructions=greeting_instruction)
     logger.info("✅ Greeting sent")
 
     # Start recording if enabled
