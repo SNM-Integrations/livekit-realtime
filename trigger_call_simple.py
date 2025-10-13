@@ -13,32 +13,50 @@ from dotenv import load_dotenv
 from livekit import api
 
 load_dotenv(".env.local")
+load_dotenv()
 
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 SIP_TRUNK_ID = os.getenv("OUTBOUND_SIP_TRUNK_ID")
 
+# Load agent configuration - use ID for direct targeting
+AGENT_ID = os.getenv("AGENT_ID", "CA_uG7inqdgtPgQ")  # Default to finn-outbound agent
+AGENT_NAME = os.getenv("AGENT_NAME")  # Optional: use name instead of ID
 
-async def create_outbound_call(lead_name: str, phone_number: str, agent_name: str = "elsa-swedish", language: str = "English"):
-    """Trigger LiveKit outbound call"""
+
+async def create_outbound_call(lead_name: str, phone_number: str, lead_source: str = "cold", company_name: str = None, referrer_name: str = "Nils", language: str = "Swedish"):
+    """Trigger LiveKit outbound call with hybrid agent metadata"""
 
     lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
 
     room_name = f"call_{lead_name.lower().replace(' ', '_')}_{int(__import__('time').time())}"
 
-    # 1. Create agent dispatch
-    await lkapi.agent_dispatch.create_dispatch(
-        api.CreateAgentDispatchRequest(
-            agent_name=agent_name,
-            room=room_name,
-            metadata=json.dumps({
-                "lead_name": lead_name,
-                "phone_number": phone_number,
-                "language": language
-            })
-        )
+    # Build metadata for hybrid outbound agent
+    metadata = {
+        "lead_source": lead_source,  # "cold", "form", "referral"
+        "lead_name": lead_name,
+        "phone_number": phone_number,
+        "company_name": company_name or lead_name,
+        "referrer_name": referrer_name,
+        "language": language
+    }
+
+    # 1. Create agent dispatch - use ID or name
+    dispatch_request = api.CreateAgentDispatchRequest(
+        room=room_name,
+        metadata=json.dumps(metadata)
     )
+
+    # Use agent ID if available (more reliable), otherwise use name
+    if AGENT_ID:
+        dispatch_request.agent_name = AGENT_ID
+    elif AGENT_NAME:
+        dispatch_request.agent_name = AGENT_NAME
+    else:
+        raise ValueError("Either AGENT_ID or AGENT_NAME must be set in environment")
+
+    await lkapi.agent_dispatch.create_dispatch(dispatch_request)
 
     # 2. Create SIP participant (make the call)
     await lkapi.sip.create_sip_participant(
@@ -83,9 +101,12 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         lead_name = data.get('name')
         phone_number = data.get('phone')
-        # Accept 'language' parameter: "English", "Swedish", or "Carolina"
-        # Fallback to 'country' for backward compatibility
-        language = data.get('language', data.get('country', 'English'))
+        company_name = data.get('company')
+        referrer_name = data.get('referrer', 'Nils')
+        lead_source = data.get('lead_source', 'cold')  # "cold", "form", "referral"
+
+        # Accept 'language' parameter - default Swedish for Finn hybrid agent
+        language = data.get('language', 'Swedish')
 
         # Validate
         if not lead_name or not phone_number:
@@ -97,8 +118,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         # Ensure E.164 format
         if not phone_number.startswith('+'):
-            # Auto-format Swedish numbers if language is Swedish or legacy country is SE
-            if (language == 'Swedish' or language == 'SE') and phone_number.startswith('07'):
+            # Auto-format Swedish numbers
+            if phone_number.startswith('07'):
                 phone_number = '+46' + phone_number[1:]
             else:
                 self.send_response(400)
@@ -107,18 +128,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Phone must be E.164 format (+467...)"}).encode())
                 return
 
-        # Agent selection based on language parameter
-        # "Carolina" → elsa-english (Swedish Carolina Profit Media agent)
-        # "English" or "Swedish" → elsa-swedish (Finn AI bilingual agent)
-        # Backward compatibility: "SE" → elsa-swedish
-        if language == "Carolina":
-            agent_name = "elsa-english"
-        else:
-            agent_name = "elsa-swedish"
-
-        # Trigger call
+        # Trigger call with hybrid agent
         try:
-            result = asyncio.run(create_outbound_call(lead_name, phone_number, agent_name, language))
+            result = asyncio.run(create_outbound_call(
+                lead_name=lead_name,
+                phone_number=phone_number,
+                lead_source=lead_source,
+                company_name=company_name,
+                referrer_name=referrer_name,
+                language=language
+            ))
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -126,7 +145,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
 
-            print(f"✅ Call initiated: {lead_name} ({phone_number}) -> Agent: {agent_name}, Room: {result.get('room_name', 'unknown')}")
+            agent_id = AGENT_ID or AGENT_NAME
+            print(f"✅ Call initiated: {lead_name} ({phone_number}) -> Agent: {agent_id}, Source: {lead_source}, Room: {result.get('room_name', 'unknown')}")
 
         except Exception as e:
             self.send_response(500)
