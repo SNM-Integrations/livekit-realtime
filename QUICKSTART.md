@@ -64,7 +64,7 @@ STYLE: Calm, professional, empathetic
    - Translate if needed
 
 4. **Update `livekit.toml`:**
-   - Set `{{AGENT_NAME}}` to something like "Robert's Assistant"
+   - Set `{{AGENT_NAME}}` to something like "Business Assistant"
    - Leave `{{YOUR_SUBDOMAIN}}` - user will fill this
 
 5. **Tell the user:**
@@ -147,22 +147,22 @@ After deployment:
 
 ## Real Examples
 
-### Swedish Insurance Agent (Robert)
+### Swedish Consultant Agent
 ```yaml
 language: "Svenska"
 voice: "marin"
 first_message: >
-  Hej, tack för att du ringde. Jag är Roberts assistent. Hur kan jag hjälpa dig idag?
+  Hej, tack för att du ringde. Jag är Alex's assistent. Hur kan jag hjälpa dig idag?
 
 prompt: |
-  Du är Roberts personliga assistent som svarar på HANS MISSADE SAMTAL.
-  Robert är försäkringsmäklare och kan inte svara just nu.
+  Du är Alex's personliga assistent som svarar på MISSADE SAMTAL.
+  Alex är konsult och kan inte svara just nu.
 
   DITT HUVUDMÅL:
   - Förstå vad personen ringer angående
   - Få namn och telefonnummer
-  - Säg att Robert ringer tillbaka
-  - FÖRSÖK INTE hjälpa med försäkringar själv
+  - Säg att Alex ringer tillbaka
+  - FÖRSÖK INTE hjälpa med konsultfrågor själv
 
   [... see AI_AGENT_CREATOR_GUIDE.md for full template]
 ```

@@ -875,7 +875,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     # Get first message from config or use default
-    greeting_message = config.get("first_message", "Hej, tack för att du ringde. Jag är Robert's assistent. Hur kan jag hjälpa dig idag?")
+    greeting_message = config.get("first_message", "Hello, thank you for calling. How can I help you today?")
 
     # Clean up multi-line YAML if needed
     if isinstance(greeting_message, str):
