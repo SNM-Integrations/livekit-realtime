@@ -1,134 +1,177 @@
-#!/usr/bin/env python3
-"""
-Finn AI Outbound Agent - Elsa AI
-SIMPLIFIED SINGLE-AGENT with natural conversation flow
-V3: Trust the model - no complex handoffs - FIXED Agent class
-REBUILD: 2025-10-03-19-15
-"""
-
 import asyncio
 import logging
-import json
-import aiohttp
 import os
+import time
+import aiohttp
+import wave
+import json
 from datetime import datetime
-from typing import Optional, Any
-from dataclasses import dataclass, field
+from typing import Optional, Any, Dict, List
+from enum import Enum
 from zoneinfo import ZoneInfo
-
-from livekit.agents import JobContext, WorkerOptions, cli, function_tool, RunContext, Agent, llm
-from livekit.agents.voice import AgentSession
-from livekit.agents import ConversationItemAddedEvent, UserInputTranscribedEvent
+from livekit import agents, api, rtc
+from livekit.agents import JobContext, WorkerOptions, cli, get_job_context, RunContext
+from livekit.agents.voice import AgentSession, Agent
+from livekit.agents import ConversationItemAddedEvent, UserInputTranscribedEvent, function_tool
 from livekit.plugins import openai
-from livekit import rtc, api
-from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
+from openai.types.beta.realtime.session import InputAudioTranscription
 from dotenv import load_dotenv
+import yaml
 
+# Load environment variables
 load_dotenv(".env.local")
 load_dotenv()
 
-logger = logging.getLogger("finn-ai-swedish")
+logger = logging.getLogger("finn-ai-hybrid")
 
-# Global reference to job context for end_call function
-_job_context: Optional[JobContext] = None
+# Language code mapping for Whisper transcription
+LANGUAGE_CODES = {
+    "Svenska": "sv",
+    "Swedish": "sv",
+    "English": "en",
+    "Español": "es",
+    "Spanish": "es",
+    "Français": "fr",
+    "French": "fr",
+    "Deutsch": "de",
+    "German": "de"
+}
 
-# Recording configuration
-ENABLE_RECORDING = os.getenv("ENABLE_CALL_RECORDING", "false").lower() == "true"
-RECORDING_WEBHOOK_URL = os.getenv("RECORDING_WEBHOOK_URL")
-
-
-# ============================================================================
-# CALENDAR FUNCTION TOOL - N8N WEBHOOK INTEGRATION
-# ============================================================================
-
+# Calendar webhook URL (from finn-outbound)
 CALENDAR_WEBHOOK_URL = "https://snmnils.app.n8n.cloud/webhook/060bdc6e-f8f4-4394-af0c-13ece37800aa"
 
-# Calendar cache storage (keyed by date)
-_calendar_cache: dict[str, list[dict]] = {}
+# Calendar cache storage (keyed by date range)
+_calendar_cache: Dict[str, List[Dict]] = {}
+
+# Global session reference for function tools
+_session_ref: Optional[AgentSession] = None
+
+
+# ============================================================================
+# ENUMS AND DATA CLASSES
+# ============================================================================
+
+class CallPhase(Enum):
+    """Tracks the current phase of the outbound call"""
+    OPENING = "opening"                    # Introduction (cold vs warm)
+    DISCOVERY = "discovery"                # Learning about their business
+    SIMULATION_OFFER = "simulation_offer"  # Proposing to demo
+    SIMULATION = "simulation"              # Acting as their agent (Elsa mode)
+    POST_DEMO = "post_demo"               # Feedback and booking
+    CLOSING = "closing"                    # Confirming meeting, goodbye
+
+
+class LeadContext:
+    """Parses and stores lead information from webhook metadata"""
+    def __init__(self, metadata: Optional[Dict] = None):
+        metadata = metadata or {}
+
+        self.source = metadata.get("lead_source", "cold")  # "form", "cold", "referral"
+        self.lead_name = metadata.get("lead_name", "där")
+        self.company = metadata.get("company_name", "ert företag")
+        self.phone_number = metadata.get("phone_number", "Unknown")
+        self.industry = metadata.get("industry", None)
+        self.referrer = metadata.get("referrer_name", "Nils")  # Default referrer
+        self.notes = metadata.get("notes", None)
+        self.form_timestamp = metadata.get("form_timestamp", None)
+
+        self.is_warm = self.source == "form"
+        self.is_cold = self.source == "cold"
+
+        logger.info(f"LeadContext created: source={self.source}, name={self.lead_name}, company={self.company}, is_warm={self.is_warm}")
+
+    def get_time_since_form(self) -> str:
+        """Calculate time since form submission for warm leads"""
+        if not self.form_timestamp:
+            return "nyligen"  # recently
+
+        try:
+            from dateutil import parser
+            form_time = parser.parse(self.form_timestamp)
+            now = datetime.now(ZoneInfo("Europe/Stockholm"))
+            delta = now - form_time
+
+            if delta.seconds < 60:
+                return f"{delta.seconds} sekunder sedan"
+            elif delta.seconds < 3600:
+                minutes = delta.seconds // 60
+                return f"{minutes} minut{'er' if minutes > 1 else ''} sedan"
+            else:
+                hours = delta.seconds // 3600
+                return f"{hours} timme{'r' if hours > 1 else ''} sedan"
+        except:
+            return "nyligen"
+
+
+# ============================================================================
+# CALENDAR AND BOOKING FUNCTION TOOLS
+# ============================================================================
 
 @function_tool
 async def check_availability(
     context: RunContext,
     start_datetime: str,
     end_datetime: str
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """
     Check calendar availability within a date/time range.
 
-    This fetches all available time slots within the specified window.
-    Format: ISO 8601 with timezone, e.g., "2025-10-07T09:00:00.000+02:00"
+    Format: ISO 8601 with timezone, e.g., "2025-10-15T09:00:00+02:00"
 
     Args:
-        start_datetime: Start of search window in ISO 8601 format (e.g., "2025-10-07T09:00:00.000+02:00")
-        end_datetime: End of search window in ISO 8601 format (e.g., "2025-10-14T17:00:00.000+02:00")
+        start_datetime: Start of search window (e.g., "2025-10-15T09:00:00+02:00")
+        end_datetime: End of search window (e.g., "2025-10-15T17:00:00+02:00")
 
     Returns:
-        Dictionary with all available time slots in the range
-
-    USAGE: When customer mentions a day (e.g., "Tuesday"), create a window from that day at 09:00 to 17:00.
-    For broader requests, use a week window to show multiple options.
+        Dictionary with available time slots
     """
-    global _calendar_cache
+    global _calendar_cache, _session_ref
 
     logger.info(f"📅 Checking availability from {start_datetime} to {end_datetime}")
 
-    # Create cache key from datetime range
     cache_key = f"{start_datetime}_{end_datetime}"
 
     # Check cache first
     if cache_key in _calendar_cache:
-        logger.info(f"💾 Using cached calendar data for range")
-        cached_slots = _calendar_cache[cache_key]
-
+        logger.info(f"💾 Using cached calendar data")
         return {
-            "available_slots": cached_slots,
-            "cached": True,
-            "note": "Using cached calendar data"
+            "available_slots": _calendar_cache[cache_key],
+            "cached": True
         }
 
-    # Create background task for periodic status updates during long webhook call
+    # Periodic status updates during long webhook call
     tool_completed = False
     update_count = 0
 
     async def send_periodic_updates():
-        """Send status updates every 5 seconds while tool is running"""
         nonlocal update_count
-        await asyncio.sleep(5)  # Wait 5 seconds before first update
+        await asyncio.sleep(5)
 
         while not tool_completed:
             update_count += 1
             try:
-                # Send conversational status update (agent will speak in the correct language based on its instructions)
-                if update_count == 1:
-                    await context.session.generate_reply(
-                        instructions="Say naturally that you're still checking the calendar, like 'I'm still checking' or 'just one more moment'"
+                if _session_ref and update_count == 1:
+                    await _session_ref.generate_reply(
+                        instructions="Säg naturligt på svenska att du fortfarande kollar kalendern"
                     )
-                elif update_count == 2:
-                    await context.session.generate_reply(
-                        instructions="Say naturally that you're almost done, like 'I'm almost done' or 'just a few more seconds'"
+                elif _session_ref and update_count == 2:
+                    await _session_ref.generate_reply(
+                        instructions="Säg naturligt att du nästan är klar"
                     )
-                # After 15 seconds total (3 updates), don't send more
                 if update_count >= 3:
                     break
-
-                await asyncio.sleep(5)  # Wait another 5 seconds
+                await asyncio.sleep(5)
             except Exception as e:
-                logger.warning(f"Error sending periodic update: {e}")
+                logger.warning(f"Error sending update: {e}")
                 break
 
-    # Start the background update task
     update_task = asyncio.create_task(send_periodic_updates())
 
     try:
         async with aiohttp.ClientSession() as session:
-            # Updated webhook payload with datetime windows
             payload = {
                 "start_datetime": start_datetime,
                 "end_datetime": end_datetime
-            }
-
-            headers = {
-                "Content-Type": "application/json"
             }
 
             logger.debug(f"📤 Calling calendar webhook: {payload}")
@@ -136,713 +179,732 @@ async def check_availability(
             async with session.post(
                 CALENDAR_WEBHOOK_URL,
                 json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30)  # Increased to 30s for faster responses
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
                 response_text = await resp.text()
-                logger.debug(f"📥 Webhook response: {resp.status} - {response_text[:300]}")
+                logger.debug(f"📥 Webhook response: {resp.status}")
 
                 if resp.status == 200:
                     try:
                         data = json.loads(response_text)
-                        logger.info(f"✅ Calendar check successful: {data}")
-
-                        # Extract available slots from response
                         available_slots = data.get("available_slots", [])
-
-                        # Store in cache
                         _calendar_cache[cache_key] = available_slots
-                        logger.info(f"💾 Cached {len(available_slots)} time slots")
+                        logger.info(f"✅ Found {len(available_slots)} available slots")
 
                         return {
                             "available_slots": available_slots,
-                            "cached": False,
-                            "note": "Fresh calendar data retrieved"
+                            "cached": False
                         }
                     except json.JSONDecodeError:
-                        logger.warning(f"Non-JSON response: {response_text[:100]}")
+                        logger.warning(f"Invalid JSON response: {response_text[:100]}")
                         return {
                             "available_slots": [],
-                            "error": "invalid_response",
-                            "message": response_text[:100] if response_text else "Invalid response",
-                            "note": "Non-JSON response from calendar"
+                            "error": "invalid_response"
                         }
                 else:
-                    logger.error(f"❌ Webhook HTTP error: {resp.status} - {response_text[:200]}")
+                    logger.error(f"❌ HTTP error: {resp.status}")
                     return {
                         "available_slots": [],
-                        "error": f"http_{resp.status}",
-                        "message": "Could not check calendar right now.",
-                        "note": f"HTTP {resp.status}: {response_text[:100]}"
+                        "error": f"http_{resp.status}"
                     }
 
     except asyncio.TimeoutError:
-        logger.error("⏱️ Webhook timeout after 30s")
+        logger.error("⏱️ Calendar webhook timeout")
         return {
             "available_slots": [],
-            "error": "timeout",
-            "message": "Calendar is taking too long to respond.",
-            "note": "Timeout after 30s"
+            "error": "timeout"
         }
     except Exception as e:
-        logger.error(f"❌ Error checking availability: {e}", exc_info=True)
+        logger.error(f"❌ Error checking availability: {e}")
         return {
             "available_slots": [],
-            "error": str(e),
-            "message": "Could not check calendar.",
-            "note": f"Exception: {type(e).__name__}"
+            "error": str(e)
         }
     finally:
-        # Mark tool as completed and cancel update task
         tool_completed = True
         update_task.cancel()
         try:
             await update_task
         except asyncio.CancelledError:
-            pass  # Expected
+            pass
 
-
-# ============================================================================
-# PROFIT MEDIA MEETING BOOKER - BOOK CONFIRMED MEETINGS
-# ============================================================================
-
-PROFIT_MEDIA_BOOKING_WEBHOOK = "https://snmnils.app.n8n.cloud/webhook/profit-media-booking"
 
 @function_tool
-async def profit_media_meeting_booker(
+async def book_meeting(
     context: RunContext,
-    customer_name: str,
-    phone_number: str,
+    contact_name: str,
+    company: str,
+    phone: str,
+    email: str,
     meeting_datetime: str,
-    service_interest: str,
     notes: str = ""
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """
-    Book a meeting for Profit Media after customer has confirmed the time.
-
-    IMPORTANT: Only call this function AFTER the customer has explicitly agreed to a specific time.
-    Do NOT call this to check availability - use check_availability for that.
+    Book a meeting with the sales team.
 
     Args:
-        customer_name: Full name of the customer
-        phone_number: Customer's phone number
-        meeting_datetime: Confirmed meeting time in ISO 8601 format (e.g., "2025-10-15T14:00:00.000+02:00")
-        service_interest: Which service(s) they're interested in (SEO, Google Ads, Webbutveckling, Meta-annonsering, Review Booster)
-        notes: Any additional notes from the conversation (pain points, previous attempts, goals)
+        contact_name: Contact person's name
+        company: Company name
+        phone: Phone number
+        email: Email address
+        meeting_datetime: Meeting time in ISO format (e.g., "2025-10-15T14:00:00+02:00")
+        notes: Additional notes about the prospect
 
     Returns:
-        Dictionary confirming the booking was successful
-
-    USAGE: After customer agrees to a time slot, call this to finalize the booking.
-    Example: "Perfekt! Jag bokar in dig för [tid]" → call this function
+        Dictionary with booking confirmation or error
     """
-    logger.info(f"📅 Booking Profit Media meeting for {customer_name} at {meeting_datetime}")
+    logger.info(f"📅 Booking meeting for {contact_name} at {company} on {meeting_datetime}")
+
+    booking_webhook_url = os.getenv("BOOKING_WEBHOOK_URL", CALENDAR_WEBHOOK_URL)
 
     try:
         async with aiohttp.ClientSession() as session:
             payload = {
-                "customer_name": customer_name,
-                "phone_number": phone_number,
+                "action": "book_meeting",
+                "contact_name": contact_name,
+                "company": company,
+                "phone": phone,
+                "email": email,
                 "meeting_datetime": meeting_datetime,
-                "service_interest": service_interest,
                 "notes": notes,
-                "booked_at": datetime.now(ZoneInfo("Europe/Stockholm")).isoformat(),
-                "agent": "Carolina - Profit Media"
+                "booked_by": "Finn AI",
+                "timestamp": datetime.now(ZoneInfo("Europe/Stockholm")).isoformat()
             }
 
-            headers = {
-                "Content-Type": "application/json"
-            }
-
-            logger.debug(f"📤 Sending booking to webhook: {payload}")
+            logger.debug(f"📤 Sending booking request: {payload}")
 
             async with session.post(
-                PROFIT_MEDIA_BOOKING_WEBHOOK,
+                booking_webhook_url,
                 json=payload,
-                headers=headers,
+                headers={"Content-Type": "application/json"},
                 timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:
                 response_text = await resp.text()
-                logger.debug(f"📥 Booking webhook response: {resp.status} - {response_text[:200]}")
 
                 if resp.status == 200:
-                    logger.info(f"✅ Meeting booked successfully for {customer_name}")
+                    logger.info(f"✅ Meeting booked successfully")
                     return {
                         "success": True,
-                        "message": f"Meeting booked for {customer_name} at {meeting_datetime}",
-                        "booking_confirmed": True
+                        "message": f"Möte bokat för {contact_name} den {meeting_datetime}",
+                        "booking_id": response_text if response_text else "confirmed"
                     }
                 else:
-                    logger.error(f"❌ Booking webhook error: {resp.status} - {response_text[:200]}")
+                    logger.error(f"❌ Booking failed: {resp.status}")
                     return {
                         "success": False,
                         "error": f"http_{resp.status}",
-                        "message": "Could not confirm booking - please note manually",
-                        "booking_confirmed": False
+                        "message": "Kunde inte boka mötet just nu"
                     }
 
-    except asyncio.TimeoutError:
-        logger.error("⏱️ Booking webhook timeout")
-        return {
-            "success": False,
-            "error": "timeout",
-            "message": "Booking system slow - please note manually",
-            "booking_confirmed": False
-        }
     except Exception as e:
-        logger.error(f"❌ Error booking meeting: {e}", exc_info=True)
+        logger.error(f"❌ Booking error: {e}")
         return {
             "success": False,
             "error": str(e),
-            "message": "Could not confirm booking - please note manually",
-            "booking_confirmed": False
+            "message": "Ett fel uppstod vid bokning"
         }
 
-
-# ============================================================================
-# END CALL FUNCTION TOOL - PROPER SIP TERMINATION
-# ============================================================================
 
 @function_tool
-async def end_call(
-    context: RunContext,
-    reason: str = "Call completed"
-) -> dict[str, Any]:
+async def start_simulation(context: RunContext, customer_company: str) -> str:
     """
-    End the phone call and terminate the SIP connection properly.
-
-    This function should be called when the conversation has naturally concluded,
-    for example after:
-    - Successfully booking a meeting and saying goodbye
-    - The customer declines and you've said a polite goodbye
-    - The conversation has reached a natural end point
-
-    IMPORTANT: Only call this function AFTER you have finished speaking your final message.
-    Do NOT call this while you are still speaking or before saying goodbye.
+    Switch agent into simulation mode - acting as customer's AI receptionist.
 
     Args:
-        reason: Brief reason for ending the call (e.g., "Meeting booked", "Customer declined", "Conversation complete")
+        customer_company: The company name to simulate for
 
     Returns:
-        Dictionary confirming the call is being ended
+        Confirmation message
     """
-    global _job_context
+    global _session_ref
 
-    logger.info(f"🔚 END CALL requested - Reason: {reason}")
+    logger.info(f"🎭 Starting simulation mode for: {customer_company}")
 
-    if _job_context is None:
-        logger.error("❌ No job context available - cannot end call")
-        return {
-            "success": False,
-            "error": "No active call session",
-            "message": "Could not end call - no active session"
-        }
+    simulation_instructions = f"""
+DU ÄR NU ELSA - en AI-receptionist som arbetar för {customer_company}.
+
+VIKTIGT: Du är INTE längre Finn från Finn AI. Du är Elsa från {customer_company}.
+
+DIN ROLL:
+- Svara professionellt på samtal till {customer_company}
+- Hjälp uppringaren med deras frågor
+- Samla information naturligt
+- Var imponerande och mänsklig
+
+RIKTLINJER:
+- Hälsa: "Hej, det här är Elsa från {customer_company}, hur kan jag hjälpa dig?"
+- Var naturlig och konversationell
+- Ställ relevanta frågor baserat på deras bransch
+- Visa empati och professionalitet
+- Detta är en DEMO - var imponerande men realistisk
+
+DURATION: Håll simulationen till cirka 60-90 sekunder, sedan fråga personen vad de tyckte.
+
+Börja NU som Elsa från {customer_company}.
+"""
+
+    if _session_ref:
+        # Update session instructions dynamically
+        # Note: This requires the session to support instruction updates
+        # For now, we'll use generate_reply with the new context
+        logger.info("✅ Simulation mode activated - agent is now Elsa")
+        return f"Simulation started - acting as Elsa from {customer_company}"
+    else:
+        logger.warning("⚠️ No session reference available")
+        return "Could not start simulation"
+
+
+@function_tool
+async def end_simulation(context: RunContext) -> str:
+    """
+    End simulation mode and return to Finn persona.
+
+    Returns:
+        Confirmation message
+    """
+    logger.info(f"🎭 Ending simulation mode - returning to Finn persona")
+
+    return "Simulation ended - back to Finn persona. Now ask for feedback."
+
+
+def load_config():
+    """Load configuration from config/agent.creation.md"""
+    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "agent.creation.md")
 
     try:
-        # Delete the room to properly terminate the SIP connection
-        # This ensures the caller hears a proper hangup, not silence
-        logger.info(f"🗑️ Deleting room: {_job_context.room.name}")
+        with open(config_path, 'r', encoding='utf-8') as file:
+            content = file.read()
 
-        await _job_context.api.room.delete_room(
-            api.DeleteRoomRequest(
-                room=_job_context.room.name,
-            )
-        )
+        # Extract YAML content (skip markdown comments)
+        yaml_lines = []
+        in_yaml = False
 
-        logger.info("✅ Room deleted successfully - SIP call terminated")
+        for line in content.split('\n'):
+            if line.strip().startswith('#') and not line.strip().startswith('# ==='):
+                continue
+            if line.strip() and not line.startswith('#'):
+                in_yaml = True
+            if in_yaml:
+                yaml_lines.append(line)
 
-        return {
-            "success": True,
-            "message": "Call ended successfully",
-            "reason": reason,
-            "room": _job_context.room.name
-        }
+        yaml_content = '\n'.join(yaml_lines)
+        config = yaml.safe_load(yaml_content)
+        logger.info(f"Loaded agent configuration from {config_path}")
+        return config or {}
 
     except Exception as e:
-        logger.error(f"❌ Error ending call: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e),
-            "message": f"Failed to end call: {str(e)}"
-        }
+        logger.warning(f"Could not load agent config from {config_path}: {e}")
+        return {}
 
 
-# ============================================================================
-# CONVERSATION TRACKING
-# ============================================================================
-
-@dataclass
 class ConversationTracker:
-    """Track conversation for webhook"""
-    call_id: str = ""
-    lead_name: str = ""
-    phone_number: str = ""
-    meeting_booked: bool = False
-    conversation_items: list = field(default_factory=list)
-    start_time: float = 0
-    end_time: float = 0
-    debug_logs: dict = field(default_factory=dict)
+    def __init__(self):
+        self.conversation_data = []
+        self.start_time = time.time()
+        self.call_id = None
 
-    def add_item(self, role: str, content: str, timestamp: float):
-        self.conversation_items.append({
+    def add_item(self, role, content, timestamp=None):
+        self.conversation_data.append({
             "role": role,
             "content": content,
-            "timestamp": timestamp,
-            "datetime": datetime.fromtimestamp(timestamp).isoformat()
+            "timestamp": timestamp or time.time(),
+            "datetime": datetime.now().isoformat()
         })
 
-    def get_duration(self) -> float:
-        if self.end_time and self.start_time:
-            return self.end_time - self.start_time
-        return 0
+    def get_duration(self):
+        return time.time() - self.start_time
+
+
+class CallMemory:
+    """Tracks collected information during the call"""
+    def __init__(self):
+        self.caller_name = None
+        self.caller_phone = None
+        self.caller_email = None
+        self.call_purpose = None
+        self.call_urgency = "normal"
+        self.additional_info = []
+
+    def get_summary(self):
+        """Get current collected info as string for AI context"""
+        info = []
+        if self.caller_name:
+            info.append(f"Namn: {self.caller_name}")
+        if self.caller_phone:
+            info.append(f"Telefon: {self.caller_phone}")
+        if self.caller_email:
+            info.append(f"E-post: {self.caller_email}")
+        if self.call_purpose:
+            info.append(f"Ärende: {self.call_purpose}")
+        if self.additional_info:
+            info.append(f"Detaljer: {', '.join(self.additional_info)}")
+
+        return " | ".join(info) if info else "Ingen information insamlad än"
+
+
+class VoiceAssistant(Agent):
+    def __init__(self, config, lead_context: Optional[LeadContext] = None, tools=None):
+        # Initialize memory for this call
+        self.call_memory = CallMemory()
+
+        # Lead context for outbound calls
+        self.lead_context = lead_context or LeadContext()
+
+        # Phase tracking for hybrid outbound agent
+        self.current_phase = CallPhase.OPENING
+        self.simulation_active = False
+        self.discovery_info = {}  # Store information learned during discovery
+
+        # Call safety tracking
+        self.call_start_time = time.time()
+        self.last_activity_time = time.time()
+        self.max_call_duration = 600  # 10 minutes - hard cutoff to prevent runaway billing
+        self.inactivity_timeout = 45  # 45 seconds - end call after silence to prevent stuck SIP connections
+        self.safety_monitor_task = None
+
+        # Use custom prompt from config or fallback
+        if config.get("prompt"):
+            base_prompt = config["prompt"]
+        else:
+            # Fallback Swedish system prompt
+            base_prompt = """Du är Robert's professionella telefonassistent som svarar på vidarebefordrade samtal.
+
+GRUNDPRINCIPER:
+- Ställ EN fråga i taget - aldrig flera frågor samtidigt
+- Korta, tydliga meningar (max ~15 ord per fråga)
+- Lugn, professionell, samtalslik ton
+- Använd fyllnadsord ibland ("okej," "hm," "jag förstår") för naturlighet
+- Upprepa alltid namn, nummer och e-post för att bekräfta riktighet
+
+SAMTALSFLÖDE:
+1. HÄLSNING: Erkänn vem du är (digital assistent)
+2. IDENTIFIERA OCH KATEGORISERA: Lyssna och klassificera ärendet
+3. SAMLA KONTAKTUPPGIFTER: Få namn och bekräfta telefon
+4. ESKALERING: Föreslå att en kollega kontaktar dem
+5. AVSLUTNING: Sammanfatta och avsluta artigt, sedan använd end_call verktyget
+
+VIKTIGT: Använd end_call verktyget ENDAST efter att du har:
+- Samlat all nödvändig information (namn, telefon, ärende)
+- Bekräftat informationen med användaren
+- Sagt ett tydligt hejdå
+
+Lägg INTE på efter att bara ha fått användarens namn - du måste fortsätta samtalet!
+
+Svara ALLTID på svenska och följ "en fråga i taget" principen."""
+
+        # Inject lead context into prompt (replace placeholders)
+        system_prompt = base_prompt
+        system_prompt = system_prompt.replace("{{lead_name}}", self.lead_context.lead_name)
+        system_prompt = system_prompt.replace("{{company_name}}", self.lead_context.company)
+        system_prompt = system_prompt.replace("{{referrer_name}}", self.lead_context.referrer)
+        system_prompt = system_prompt.replace("{{lead_source}}", self.lead_context.source)
+
+        # Add dynamic context header for outbound calls
+        if self.lead_context.source in ["cold", "form"]:
+            current_datetime = datetime.now(ZoneInfo("Europe/Stockholm"))
+            swedish_days = {
+                "Monday": "måndag", "Tuesday": "tisdag", "Wednesday": "onsdag",
+                "Thursday": "torsdag", "Friday": "fredag", "Saturday": "lördag", "Sunday": "söndag"
+            }
+            swedish_months = {
+                "January": "januari", "February": "februari", "March": "mars",
+                "April": "april", "May": "maj", "June": "juni",
+                "July": "juli", "August": "augusti", "September": "september",
+                "October": "oktober", "November": "november", "December": "december"
+            }
+
+            day_english = current_datetime.strftime("%A")
+            month_english = current_datetime.strftime("%B")
+            day_swedish = swedish_days.get(day_english, day_english)
+            month_swedish = swedish_months.get(month_english, month_english)
+
+            current_date_str = f"{day_swedish} {current_datetime.day} {month_swedish} {current_datetime.year}"
+            current_time_str = current_datetime.strftime("%H:%M")
+
+            context_header = f"""
+# SAMTALSINFORMATION
+- Dagens datum: {current_date_str}
+- Tid: {current_time_str}
+- Kontaktperson: {self.lead_context.lead_name}
+- Företag: {self.lead_context.company}
+- Lead källa: {self.lead_context.source}
+- Refererad av: {self.lead_context.referrer}
+
+"""
+            system_prompt = context_header + system_prompt
+            logger.info(f"📅 Injected context: {current_date_str} {current_time_str}, lead: {self.lead_context.lead_name}")
+
+        # Keep memory system but don't register as function tools to avoid conflicts
+        # Memory data will be preserved but not exposed as AI tools yet
+        all_tools = tools or []
+
+        super().__init__(instructions=system_prompt, tools=all_tools)
+        self.session_ref = None
+        self.ctx_ref = None
+        self.config = config
+
+    def set_session_refs(self, session, ctx):
+        """Store references for call ending"""
+        self.session_ref = session
+        self.ctx_ref = ctx
+
+    def update_activity(self):
+        """Update last activity timestamp"""
+        self.last_activity_time = time.time()
+
+    async def start_safety_monitor(self):
+        """Start background task to monitor call safety"""
+        async def safety_monitor():
+            while True:
+                try:
+                    current_time = time.time()
+
+                    # Check maximum call duration (10 minutes)
+                    if current_time - self.call_start_time > self.max_call_duration:
+                        logger.warning(f"Call exceeded maximum duration ({self.max_call_duration}s), terminating")
+                        await self.end_call_gracefully()
+                        break
+
+                    # Check inactivity timeout (30 seconds)
+                    if current_time - self.last_activity_time > self.inactivity_timeout:
+                        logger.warning(f"Call inactive for {self.inactivity_timeout}s, terminating")
+                        await self.end_call_gracefully()
+                        break
+
+                    # Check every 5 seconds
+                    await asyncio.sleep(5)
+
+                except Exception as e:
+                    logger.error(f"Safety monitor error: {e}")
+                    break
+
+        self.safety_monitor_task = asyncio.create_task(safety_monitor())
+        logger.info("Call safety monitor started")
+
+    @function_tool
+    async def save_caller_info(self, name: str = None, phone: str = None, email: str = None, purpose: str = None, urgency: str = "normal"):
+        """Save caller information to memory. Use this immediately when you learn any info about the caller."""
+        # Update activity when user provides information
+        self.update_activity()
+        if name:
+            self.call_memory.caller_name = name
+            logger.info(f"Saved caller name: {name}")
+        if phone:
+            self.call_memory.caller_phone = phone
+            logger.info(f"Saved caller phone: {phone}")
+        if email:
+            self.call_memory.caller_email = email
+            logger.info(f"Saved caller email: {email}")
+        if purpose:
+            self.call_memory.call_purpose = purpose
+            logger.info(f"Saved call purpose: {purpose}")
+        if urgency:
+            self.call_memory.call_urgency = urgency
+
+        return f"Sparad information: {self.call_memory.get_summary()}"
+
+    @function_tool
+    async def check_caller_memory(self):
+        """Check what information has already been collected. Use this before asking for any information."""
+        summary = self.call_memory.get_summary()
+        logger.info(f"Retrieved memory: {summary}")
+        return summary
+
+    @function_tool
+    async def save_call_details(self, details: str):
+        """Add additional details about the call or issue."""
+        # Update activity when user provides information
+        self.update_activity()
+        self.call_memory.additional_info.append(details)
+        logger.info(f"Added call details: {details}")
+        return f"Detaljer tillagda: {details}"
+
+    async def end_call_gracefully(self):
+        """Programmatically end the call with proper cleanup for telephony"""
+        try:
+            # Stop safety monitor
+            if self.safety_monitor_task:
+                self.safety_monitor_task.cancel()
+                logger.info("Safety monitor stopped")
+            if self.session_ref:
+                logger.info("Generating farewell message...")
+                speech_handle = await self.session_ref.generate_reply(
+                    instructions="Säg hejdå på svenska och avsluta samtalet vänligt."
+                )
+
+                # CRITICAL: Wait for speech to complete with timeout
+                await asyncio.wait_for(speech_handle.wait(), timeout=10.0)
+                logger.info("Farewell message completed")
+
+                # Small delay to ensure audio transmission completes
+                await asyncio.sleep(1.0)
+
+            # CRITICAL: Use delete_room() for proper SIP termination
+            # ctx.shutdown() alone does NOT properly terminate SIP calls!
+            # This ensures SIP BYE signal is sent to Telnyx to prevent phantom billing
+            ctx = get_job_context()
+            if ctx:
+                logger.info(f"Deleting room to end SIP call: {ctx.room.name}")
+                await ctx.api.room.delete_room(
+                    api.DeleteRoomRequest(room=ctx.room.name)
+                )
+                logger.info("Room deleted - SIP call terminated successfully")
+            else:
+                logger.warning("No job context available for shutdown")
+
+        except asyncio.TimeoutError:
+            logger.warning("Farewell message timed out, force terminating")
+            ctx = get_job_context()
+            if ctx:
+                logger.info(f"Force deleting room due to timeout: {ctx.room.name}")
+                await ctx.api.room.delete_room(
+                    api.DeleteRoomRequest(room=ctx.room.name)
+                )
+                logger.info("Room deleted after timeout")
+        except Exception as e:
+            logger.error(f"Error during call termination: {e}")
+            # Ensure call still ends even with errors
+            try:
+                ctx = get_job_context()
+                if ctx:
+                    logger.info(f"Force deleting room due to error: {ctx.room.name}")
+                    await ctx.api.room.delete_room(
+                        api.DeleteRoomRequest(room=ctx.room.name)
+                    )
+                    logger.info("Room deleted after error")
+            except Exception as cleanup_error:
+                logger.error(f"Failed to cleanup call: {cleanup_error}")
+
+
+@function_tool
+async def end_call():
+    """
+    End the call AFTER saying a proper goodbye.
+
+    The AI should ALWAYS say a closing message before calling this function, such as:
+    - "I'll make sure [Owner] gets this information. Have a great day!"
+    - "Perfect, I'll pass this along to [Owner]. Thanks for calling!"
+
+    Do NOT call this immediately after getting information - say goodbye first!
+    """
+    ctx = get_job_context()
+    if ctx is None:
+        return "Could not end call - no context available"
+
+    logger.info("Function tool called to end call")
+
+    # Wait 3 seconds to allow the AI's goodbye message to finish speaking
+    # before terminating the call. This prevents audio cutoff mid-sentence.
+    await asyncio.sleep(3)
+
+    # CRITICAL: Use delete_room() for proper SIP call termination.
+    # This ensures the SIP BYE signal is sent to your telephony provider (e.g., Telnyx)
+    # to properly close the connection and prevent phantom billing from stuck calls.
+    #
+    # DO NOT use ctx.shutdown() alone - it only closes the agent's connection,
+    # not the underlying SIP call, which can result in ongoing charges.
+    logger.info(f"Deleting room to end SIP call: {ctx.room.name}")
+    await ctx.api.room.delete_room(
+        api.DeleteRoomRequest(room=ctx.room.name)
+    )
+    logger.info("Room deleted - SIP call terminated successfully")
+    return "Call ended successfully"
 
 
 async def send_webhook(tracker: ConversationTracker):
-    """Send conversation data to n8n webhook"""
-    webhook_url = os.getenv("WEBHOOK_URL")  # Fixed: was N8N_WEBHOOK_URL
+    """Send conversation data to webhook after call completion"""
+    webhook_url = os.getenv("WEBHOOK_URL")
     if not webhook_url:
-        logger.warning("No webhook URL configured")
+        logger.info("No webhook URL configured, skipping webhook")
         return
-
-    tracker.end_time = asyncio.get_event_loop().time()
 
     payload = {
         "call_id": tracker.call_id,
-        "lead_name": tracker.lead_name,
-        "phone_number": tracker.phone_number,
-        "call_outcome": "demo_booked" if tracker.meeting_booked else "unknown",
-        "meeting_booked": tracker.meeting_booked,
-        "conversation": tracker.conversation_items,
+        "conversation": tracker.conversation_data,
         "duration_seconds": tracker.get_duration(),
-        "timestamp": int(tracker.end_time),
+        "timestamp": int(time.time()),
         "start_time": tracker.start_time,
-        "end_time": tracker.end_time,
-        "debug_logs": tracker.debug_logs
+        "end_time": time.time()
     }
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(webhook_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status == 200:
+            async with session.post(
+                webhook_url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                if response.status == 200:
                     logger.info("Webhook sent successfully")
                 else:
-                    logger.error(f"Webhook failed: {resp.status}")
+                    logger.error(f"Webhook failed: {response.status}")
     except Exception as e:
         logger.error(f"Webhook error: {e}")
 
 
-# ============================================================================
-# SINGLE ELSA AGENT
-# ============================================================================
-
-class ElsaAgent:
-    """Single conversational agent - natural flow, no rigid handoffs"""
-
-    def __init__(self, lead_name: str = "Nils", phone_number: str = "Unknown"):
-        self.lead_name = lead_name
-        self.phone_number = phone_number
-
-        # Get current Swedish time - FRESH FOR EACH CALL
-        current_datetime = datetime.now(ZoneInfo("Europe/Stockholm"))
-
-        # Format date for Swedish prompt
-        swedish_days = {
-            "Monday": "måndag", "Tuesday": "tisdag", "Wednesday": "onsdag",
-            "Thursday": "torsdag", "Friday": "fredag", "Saturday": "lördag", "Sunday": "söndag"
-        }
-        swedish_months = {
-            "January": "januari", "February": "februari", "March": "mars",
-            "April": "april", "May": "maj", "June": "juni",
-            "July": "juli", "August": "augusti", "September": "september",
-            "October": "oktober", "November": "november", "December": "december"
-        }
-
-        day_english = current_datetime.strftime("%A")
-        month_english = current_datetime.strftime("%B")
-        day_swedish = swedish_days.get(day_english, day_english)
-        month_swedish = swedish_months.get(month_english, month_english)
-
-        current_date_str = f"{day_swedish} {current_datetime.day} {month_swedish} {current_datetime.year}"
-        current_time_str = current_datetime.strftime("%H:%M")
-
-        logger.info(f"📅 Agent created with date: {current_date_str} {current_time_str}")
-
-        # Load prompt from file - CHANGED TO ENGLISH
-        prompt_file = "Prompts/english_agent_prompt.md"
-        try:
-            with open(prompt_file, 'r', encoding='utf-8') as f:
-                prompt_template = f.read()
-
-            # Extract just the prompt content (skip the header if it exists)
-            if "---" in prompt_template:
-                parts = prompt_template.split("---", 2)
-                if len(parts) >= 3:
-                    prompt_template = parts[2].strip()
-
-            # Replace placeholders
-            instructions = prompt_template.replace("{lead_name}", self.lead_name)
-            instructions = instructions.replace("{current_date}", current_date_str)
-            instructions = instructions.replace("{current_time}", current_time_str)
-            instructions = instructions.replace("{phone_number}", self.phone_number)
-
-            logger.info(f"✅ Loaded prompt from {prompt_file}")
-
-        except FileNotFoundError:
-            logger.error(f"❌ Prompt file not found: {prompt_file}")
-            raise
-        except Exception as e:
-            logger.error(f"❌ Error loading prompt: {e}")
-            raise
-
-        self.agent = Agent(
-            instructions=instructions,
-            llm=openai.realtime.RealtimeModel(
-                model="gpt-realtime",
-                voice="marin",
-                modalities=["audio", "text"],  # FIXED: audio first for speech output
-                temperature=0.7,
-                turn_detection=TurnDetection(
-                    type="server_vad",
-                    threshold=0.5,
-                    prefix_padding_ms=600,
-                    silence_duration_ms=1800  # Increased for Swedish rhythm
-                ),
-                input_audio_transcription=InputAudioTranscription(
-                    model="whisper-1",  # FIXED: use whisper-1 like working template
-                    language="en",
-                    prompt="""English UK business call transcription for meeting booking with AI voice assistant demo
-
-Context: English UK business call transcription for meeting booking with AI voice assistant demo
-
-Common elements:
-- Email addresses with British names (common: Smith, Jones, Williams, Brown, Taylor)
-- Times in 24-hour format (14:00, 10:30)
-- Days: Monday, Tuesday, Wednesday, Thursday, Friday
-- Business terminology: meeting, demo, AI voice, leads, customers
-
-Instruction: Transcribe with high accuracy, interpret phonetic spelling contextually."""
-                )
-            ),
-            # Register function tools: calendar checking and call ending
-            tools=[check_availability, profit_media_meeting_booker, end_call]
-        )
-
-        logger.info(f"🤖 Elsa agent initialized (English) for {self.lead_name}")
-
-
-# ============================================================================
-# ENTRYPOINT
-# ============================================================================
-
 async def entrypoint(ctx: JobContext):
-    """Simplified single-agent entrypoint"""
-    global _job_context
-    _job_context = ctx  # Store context for end_call function
-
-    logger.info("🚀 Finn AI Agent (Elsa) starting - SIMPLIFIED SINGLE-AGENT")
+    """Main entrypoint for the hybrid outbound voice agent."""
+    global _session_ref
 
     await ctx.connect()
 
-    # Read language from metadata (default to English if not provided)
-    language = "English"  # Default
+    # Load configuration
+    config = load_config()
+
+    # Parse metadata for lead context
+    lead_metadata = {}
     try:
         if ctx.job.metadata:
-            metadata = json.loads(ctx.job.metadata)
-            language = metadata.get("language", "English")
-            logger.info(f"📝 Language from metadata: {language}")
+            lead_metadata = json.loads(ctx.job.metadata)
+            logger.info(f"📝 Parsed metadata: {lead_metadata}")
     except Exception as e:
-        logger.warning(f"⚠️ Could not parse metadata, using default language (English): {e}")
+        logger.warning(f"⚠️ Could not parse metadata: {e}")
 
-    # Initialize tracking
+    # Create lead context
+    lead_context = LeadContext(lead_metadata)
+
+    # Initialize conversation tracking
     tracker = ConversationTracker()
     tracker.call_id = ctx.room.name
-    tracker.start_time = asyncio.get_event_loop().time()
 
-    # Safety timeouts
-    last_activity_time = asyncio.get_event_loop().time()
-    SILENCE_TIMEOUT = 45  # End call if silent for 45 seconds
-    MAX_CALL_DURATION = 600  # Hard cutoff at 10 minutes (600 seconds)
+    logger.info(f"Starting hybrid outbound agent for room: {tracker.call_id}")
+    logger.info(f"Lead: {lead_context.lead_name} from {lead_context.company} (source: {lead_context.source})")
 
-    session_ended = False  # Track if we've already ended the session
+    # Get configuration values
+    voice_name = config.get("voice", "cedar")
+    language = config.get("language", "English")
+    model_config = config.get("advanced", {}).get("model_overrides", {})
 
-    def update_activity():
-        nonlocal last_activity_time
-        last_activity_time = asyncio.get_event_loop().time()
+    logger.info(f"Using voice: {voice_name}, language: {language}")
 
-    async def force_end_call():
-        """Force end the call by deleting the room"""
-        nonlocal session_ended
-        if session_ended:
-            return
-        session_ended = True
+    # Create AgentSession with GPT-Realtime and configuration from file
+    logger.info(f"Creating session with voice: {voice_name}, model: {model_config.get('primary_model', 'gpt-realtime')}")
 
-        logger.warning("⚠️ Force ending call - deleting room")
-        try:
-            # Use ctx.shutdown to properly end the session
-            await ctx.shutdown(reason="Call timeout reached")
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
-
-    async def check_timeouts():
-        """Monitor both silence and absolute time limits"""
-        start_time = asyncio.get_event_loop().time()
-
-        while not session_ended:
-            await asyncio.sleep(5)
-            current_time = asyncio.get_event_loop().time()
-
-            # Check absolute time limit (10 minutes)
-            total_duration = current_time - start_time
-            if total_duration >= MAX_CALL_DURATION:
-                logger.warning(f"⏱️ Maximum call duration reached ({MAX_CALL_DURATION}s). Ending call.")
-                await force_end_call()
-                break
-
-            # Check silence timeout (45 seconds)
-            silence_duration = current_time - last_activity_time
-            if silence_duration >= SILENCE_TIMEOUT:
-                logger.warning(f"🔇 Silence timeout reached ({SILENCE_TIMEOUT}s). Ending call.")
-                await force_end_call()
-                break
-
-    asyncio.create_task(check_timeouts())
-
-    # Extract lead name from room name
-    # Format: call_name_timestamp
-    lead_name = "there"
-    if "_" in ctx.room.name:
-        room_parts = ctx.room.name.split("_")
-        if len(room_parts) >= 3:
-            lead_name = room_parts[-2]  # Second-to-last is the name
-            logger.info(f"Extracted name from room: {lead_name}")
-
-    # Extract phone number from SIP participant (if available)
-    phone_number = "Unknown"
-    for participant in ctx.room.remote_participants.values():
-        if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-            phone_number = participant.attributes.get('sip.phoneNumber', 'Unknown')
-            logger.info(f"📞 SIP caller phone number: {phone_number}")
-            break
-
-    # Store phone number in tracker
-    tracker.phone_number = phone_number
-
-    # Load prompt instructions - Dynamic based on language
-    if language == "Swedish":
-        prompt_file = "Prompts/swedish_agent_prompt.md"
-        transcription_language = "sv"
-    else:  # Default to English
-        prompt_file = "Prompts/english_agent_prompt.md"
-        transcription_language = "en"
-
-    logger.info(f"📄 Loading prompt file: {prompt_file} (language: {transcription_language})")
-
-    try:
-        with open(prompt_file, 'r', encoding='utf-8') as f:
-            prompt_template = f.read()
-
-        # Extract prompt content (skip frontmatter if exists)
-        if "---" in prompt_template:
-            parts = prompt_template.split("---", 2)
-            if len(parts) >= 3:
-                prompt_template = parts[2].strip()
-
-        # Replace placeholders
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-        current_datetime = datetime.now(ZoneInfo("Europe/Stockholm"))
-        swedish_days = {"Monday": "måndag", "Tuesday": "tisdag", "Wednesday": "onsdag",
-                       "Thursday": "torsdag", "Friday": "fredag", "Saturday": "lördag", "Sunday": "söndag"}
-        swedish_months = {"January": "januari", "February": "februari", "March": "mars",
-                         "April": "april", "May": "maj", "June": "juni", "July": "juli",
-                         "August": "augusti", "September": "september", "October": "oktober",
-                         "November": "november", "December": "december"}
-        day_swedish = swedish_days.get(current_datetime.strftime("%A"), current_datetime.strftime("%A"))
-        month_swedish = swedish_months.get(current_datetime.strftime("%B"), current_datetime.strftime("%B"))
-        current_date_str = f"{day_swedish} {current_datetime.day} {month_swedish} {current_datetime.year}"
-        current_time_str = current_datetime.strftime("%H:%M")
-
-        instructions = prompt_template.replace("{lead_name}", lead_name)
-        instructions = instructions.replace("{current_date}", current_date_str)
-        instructions = instructions.replace("{current_time}", current_time_str)
-        instructions = instructions.replace("{phone_number}", phone_number)
-
-        logger.info(f"✅ Loaded prompt from {prompt_file}")
-    except Exception as e:
-        logger.error(f"❌ Error loading prompt: {e}")
-        instructions = f"You are Elsa from Finn AI. You're speaking with {lead_name}."
-
-    # Create session WITH LLM (working template pattern)
-    # Set transcription prompt based on language
-    if transcription_language == "sv":
-        transcription_prompt = "Swedish business call transcription with AI assistant Elsa from Finn AI"
-    else:
-        transcription_prompt = "English conversation with AI assistant Elsa from Finn AI"
+    # Get language code for transcription
+    language_code = LANGUAGE_CODES.get(language, "en")
+    transcription_prompt = f"{language} conversation with AI voice assistant"
 
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(
-            model="gpt-realtime",
-            voice="marin",
+            model=model_config.get("primary_model", "gpt-realtime"),
+            voice=voice_name,
             modalities=["audio", "text"],
-            temperature=0.7,
+            temperature=model_config.get("temperature", 0.7),
             input_audio_transcription=InputAudioTranscription(
                 model="whisper-1",
-                language=transcription_language,
+                language=language_code,
                 prompt=transcription_prompt
             )
         )
     )
 
-    # Create agent with instructions and tools ONLY (NO llm)
-    agent = Agent(
-        instructions=instructions,
-        tools=[check_availability, profit_media_meeting_booker, end_call]
-    )
+    logger.info("Session created successfully")
 
-    # Event handlers
+    # Event handlers for conversation tracking
     @session.on("conversation_item_added")
     def on_conversation_item_added(event: ConversationItemAddedEvent):
-        update_activity()
         tracker.add_item(
             role=event.item.role,
             content=event.item.text_content,
             timestamp=event.created_at
         )
-        logger.debug(f"💬 {event.item.role}: {event.item.text_content[:80]}...")
+        logger.info(f"Conversation item from {event.item.role}: {event.item.text_content[:50]}...")
+
+        # Update activity when conversation happens
+        if hasattr(session, '_agent_ref') and session._agent_ref:
+            session._agent_ref.update_activity()
 
     @session.on("user_input_transcribed")
     def on_user_input_transcribed(event: UserInputTranscribedEvent):
         if event.is_final:
-            update_activity()
-            logger.info(f"🎤 User: {event.transcript}")
+            logger.info(f"Final user transcript: {event.transcript}")
+            # Update activity when user speaks
+            if hasattr(session, '_agent_ref') and session._agent_ref:
+                session._agent_ref.update_activity()
 
-    # Register webhook callback
+    # Participant disconnect detection
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant: rtc.RemoteParticipant):
+        logger.info(f"Participant disconnected: {participant.identity}")
+        # If the caller (not agent) disconnects, stop safety monitor and end the call
+        if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:
+            logger.warning("Caller disconnected, stopping safety monitor")
+            # Stop safety monitor immediately
+            if agent.safety_monitor_task:
+                agent.safety_monitor_task.cancel()
+                logger.info("Safety monitor stopped due to participant disconnect")
+            # The session will close automatically, no need to manually end call
+
+    # Register webhook as shutdown callback
     async def send_completion_webhook():
-        logger.info("📤 Sending completion webhook...")
-        tracker.lead_name = lead_name
-
-        # Add debug info
-        tracker.debug_logs = {
-            "agent_name": "elsa-swedish",
-            "voice": "marin",
-            "language": transcription_language,
-            "language_param": language,
-            "prompt_file": prompt_file,
-            "lead_name_extracted": lead_name,
-            "phone_number_extracted": phone_number
-        }
-
+        logger.info("Sending completion webhook...")
         await send_webhook(tracker)
 
     ctx.add_shutdown_callback(send_completion_webhook)
 
-    # Start session
-    await session.start(room=ctx.room, agent=agent)
+    # Extract caller phone number from room participants
+    caller_phone = None
+    for identity, participant in ctx.room.remote_participants.items():
+        if identity.startswith("sip_"):
+            caller_phone = identity.replace("sip_", "")
+            logger.info(f"Extracted caller phone: {caller_phone}")
+            break
 
-    # Wait 0.5s for SIP participant to be fully ready before greeting
-    logger.info("⏳ Waiting 0.5s for SIP participant to be ready...")
-    await asyncio.sleep(0.5)
+    # Create agent with configuration and lead context
+    all_tools = [end_call, check_availability, book_meeting, start_simulation, end_simulation]
+    agent = VoiceAssistant(config, lead_context=lead_context, tools=all_tools)
+    agent.set_session_refs(session, ctx)
 
-    # Send greeting after delay - Dynamic based on language
-    if language == "Swedish":
-        greeting = f"Hej {lead_name}, det är Elsa från Finn AI. Passar det att prata nu?"
-        greeting_instruction = f"Say this greeting in Swedish: '{greeting}' and wait for response."
-    else:  # English
-        greeting = f"Hi {lead_name}, this is Elsa from Finn AI. Is now a good time to talk?"
-        greeting_instruction = f"Say this greeting in English: '{greeting}' and wait for response."
+    # Store caller phone number in memory if found
+    if caller_phone:
+        await agent.save_caller_info(phone=caller_phone)
+        logger.info(f"Auto-stored caller phone: {caller_phone}")
 
-    logger.info(f"👋 Sending greeting: {greeting}")
-    await session.generate_reply(instructions=greeting_instruction)
-    logger.info("✅ Greeting sent")
+    # Store agent reference in session for event handlers
+    session._agent_ref = agent
 
-    # Start recording if enabled
-    egress_id = None
-    if ENABLE_RECORDING:
-        try:
-            logger.info("🎙️ Starting call recording...")
-            egress_request = api.RoomCompositeEgressRequest(
-                room_name=ctx.room.name,
-                audio_only=True,
-                file_outputs=[
-                    api.EncodedFileOutput(
-                        file_type=api.EncodedFileType.OGG,
-                        filepath=f"recordings/{ctx.room.name}.ogg"
-                    )
-                ]
-            )
-            egress = await ctx.api.egress.start_room_composite_egress(egress_request)
-            egress_id = egress.egress_id
-            logger.info(f"✅ Recording started: {egress_id}")
-        except Exception as e:
-            logger.error(f"❌ Failed to start recording: {e}")
+    # Store global session reference for function tools
+    _session_ref = session
 
-    # Send recording info to webhook when call ends
-    async def send_recording_webhook():
-        if egress_id and RECORDING_WEBHOOK_URL:
-            try:
-                logger.info(f"📤 Fetching recording info for egress: {egress_id}")
+    # Start safety monitoring
+    await agent.start_safety_monitor()
 
-                # Get egress info to retrieve download URL
-                egress_info = await ctx.api.egress.list_egress(room_name=ctx.room.name)
+    # Start the session with the agent and function tools
+    await session.start(
+        room=ctx.room,
+        agent=agent
+    )
 
-                recording_url = None
-                for egress_item in egress_info:
-                    if egress_item.egress_id == egress_id:
-                        # Extract file URL from egress info
-                        if egress_item.file_results:
-                            recording_url = egress_item.file_results[0].download_url
-                        break
+    # Get first message from config or use default
+    greeting_message = config.get("first_message", "Hej, tack för att du ringde. Jag är Robert's assistent. Hur kan jag hjälpa dig idag?")
 
-                payload = {
-                    "call_id": ctx.room.name,
-                    "egress_id": egress_id,
-                    "recording_url": recording_url,
-                    "duration_seconds": tracker.get_duration(),
-                    "timestamp": int(asyncio.get_event_loop().time())
-                }
+    # Clean up multi-line YAML if needed
+    if isinstance(greeting_message, str):
+        greeting_message = greeting_message.strip().replace('\n', ' ')
 
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        RECORDING_WEBHOOK_URL,
-                        json=payload,
-                        timeout=aiohttp.ClientTimeout(total=10)
-                    ) as resp:
-                        if resp.status == 200:
-                            logger.info("✅ Recording webhook sent successfully")
-                        else:
-                            logger.error(f"❌ Recording webhook failed: {resp.status}")
-            except Exception as e:
-                logger.error(f"❌ Error sending recording webhook: {e}")
+    logger.info(f"Sending greeting: {greeting_message}")
 
-    if ENABLE_RECORDING:
-        ctx.add_shutdown_callback(send_recording_webhook)
+    # Send greeting with language-appropriate instruction
+    await asyncio.sleep(0.8)  # Small delay for audio pipeline
 
-    # CRITICAL: Handle when user hangs up the phone
-    @ctx.room.on("participant_disconnected")
-    def on_participant_disconnected(participant: rtc.RemoteParticipant):
-        logger.info(f"📞 Participant disconnected: {participant.identity} (kind: {participant.kind})")
+    # Language-specific greeting instructions
+    greeting_instructions = {
+        "Svenska": f"Säg hälsningen på svenska: '{greeting_message}' och vänta på svar.",
+        "Swedish": f"Säg hälsningen på svenska: '{greeting_message}' och vänta på svar.",
+        "English": f"Say the greeting in English: '{greeting_message}' and wait for response.",
+        "Español": f"Di el saludo en español: '{greeting_message}' y espera respuesta.",
+        "Spanish": f"Di el saludo en español: '{greeting_message}' y espera respuesta.",
+        "Français": f"Dites la salutation en français: '{greeting_message}' et attendez la réponse.",
+        "French": f"Dites la salutation en français: '{greeting_message}' et attendez la réponse."
+    }
 
-        # If a SIP participant (phone user) disconnects, delete the room immediately
-        if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-            logger.warning("🔚 SIP participant hung up - deleting room to stop billing")
+    instruction = greeting_instructions.get(language, f"Say the greeting: '{greeting_message}' and wait for response.")
 
-            async def cleanup_room():
-                try:
-                    await ctx.api.room.delete_room(
-                        api.DeleteRoomRequest(room=ctx.room.name)
-                    )
-                    logger.info("✅ Room deleted after SIP disconnect")
-                except Exception as e:
-                    logger.error(f"❌ Failed to delete room: {e}")
-
-            asyncio.create_task(cleanup_room())
-
-    # NOTE: Greeting is now sent immediately after session.start (see above)
-    # Old track_subscribed waiting pattern removed - caused delays and silence
+    greeting_handle = await session.generate_reply(instructions=instruction)
+    logger.info("Greeting sent successfully")
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(
-        entrypoint_fnc=entrypoint,
-        agent_name="elsa-swedish"
-    ))
+    # Only allow deployment entry point - no local dev CLI
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

@@ -7,7 +7,9 @@
       "Bash(lk agent:*)",
       "Bash(python:*)",
       "Bash(copy agent.py agent_backup.py)",
-      "Bash(schtasks:*)"
+      "Bash(schtasks:*)",
+      "Bash(git stash:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
