@@ -34,6 +34,7 @@ RUN pip install --no-cache-dir .
 
 # Copy application files
 COPY src/agent.py ./
+COPY config/ ./config/
 
 # Set ownership
 RUN chown -R appuser:appuser /app
