@@ -44,12 +44,12 @@ AGENT PURPOSE: [What should the agent do?]
 CONVERSATION STYLE: [How should it behave?]
 ```
 
-### Example 1: Insurance Agent
+### Example 1: Consulting Business
 ```
-OWNER NAME: Robert
-BUSINESS/ROLE: Insurance broker
-LANGUAGE: Svenska
-AGENT PURPOSE: Handle missed calls, collect caller information and reason for calling, tell them Robert will call back
+OWNER NAME: Alex
+BUSINESS/ROLE: Business consultant
+LANGUAGE: English
+AGENT PURPOSE: Handle missed calls, collect caller information and reason for calling, tell them the consultant will call back
 CONVERSATION STYLE: Professional but warm, conversational, never pushy, asks 1-2 questions max then ends call
 ```
 
@@ -240,7 +240,7 @@ Replace these template variables:
 ### 2. `livekit.toml`
 Replace:
 - `{{YOUR_SUBDOMAIN}}` → Use subdomain from Step 2 (e.g., "myproj-abc123")
-- `{{AGENT_NAME}}` → Display name like "Robert's Assistant" or "Bella Vista Reservations"
+- `{{AGENT_NAME}}` → Display name like "Business Assistant" or "Bella Vista Reservations"
 
 **Example:**
 ```toml
@@ -249,7 +249,7 @@ subdomain = "myproj-abc123"
 
 [agent]
 id = ""  # Leave empty for now
-name = "Robert's Assistant"
+name = "Business Assistant"
 type = "voice"
 ```
 

@@ -84,14 +84,16 @@ prompt: |
 ## Key Features
 
 ### 1. Proper SIP Termination (CRITICAL)
-The agent uses `ctx.shutdown()` instead of `delete_room()` to properly close SIP connections:
+The agent uses `delete_room()` to properly close SIP connections and send the SIP BYE signal:
 
 ```python
-# ✅ CORRECT - Sends SIP BYE signal
-await ctx.shutdown(reason="Call completed")
+# ✅ CORRECT - Properly terminates SIP calls
+await ctx.api.room.delete_room(
+    api.DeleteRoomRequest(room=ctx.room.name)
+)
 
-# ❌ WRONG - Leaves SIP trunk open (phantom billing)
-await ctx.api.room.delete_room(...)
+# Note: ctx.shutdown() alone may not send SIP BYE signal reliably
+# Always use delete_room() for telephony/SIP calls
 ```
 
 See `docs/SIP_INTEGRATION_BEST_PRACTICES.md` for full details.
@@ -121,7 +123,7 @@ Tracks information during calls to prevent re-asking:
 
 1. **Cloud-Only Deployment** - NEVER run agents locally (see warning above)
 2. **Config-Driven Behavior** - Change agent via config files, not code edits
-3. **Always Use ctx.shutdown()** - Never use delete_room() for SIP calls
+3. **Always Use delete_room()** - Properly terminate SIP calls to prevent phantom billing
 4. **Test Timeouts** - Verify calls end after 45s silence or 10min max
 5. **Check for Stuck Calls** - Use `lk room list` to verify no lingering rooms
 6. **Monitor Billing** - Check LiveKit dashboard for agent session minutes
@@ -178,7 +180,7 @@ This is a **very common mistake** when creating new agents from the template. Th
 **Solution:** Agent waits for SIP participant to connect before greeting. If still happening, check logs for timing.
 
 ### Issue: Calls lasting hours in billing
-**Solution:** Agent not using `ctx.shutdown()`. Verify code has the SIP termination fix.
+**Solution:** Agent not using `delete_room()` properly. Verify code properly terminates SIP connections.
 
 ### Issue: Agent asks for information already provided
 **Solution:** CallMemory system should prevent this. Check `save_caller_info()` is being called.

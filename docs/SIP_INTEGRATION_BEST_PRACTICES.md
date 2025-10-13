@@ -29,14 +29,16 @@ When a LiveKit agent ends a call by deleting the room, **the SIP connection may 
 Your agent needs **three independent safeguards** to ensure calls ALWAYS end properly:
 
 ### 1. Proper Shutdown Method
-✅ **Use `ctx.shutdown()` instead of `delete_room()`**
+✅ **Use `delete_room()` to reliably send SIP BYE signal**
 
 ```python
-# ❌ WRONG - May not send SIP BYE
-await ctx.api.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
+# ✅ CORRECT - Properly terminates SIP calls
+await ctx.api.room.delete_room(
+    api.DeleteRoomRequest(room=ctx.room.name)
+)
 
-# ✅ CORRECT - Proper SIP termination
-await ctx.shutdown(reason="Call ended")
+# Note: ctx.shutdown() alone may not reliably send SIP BYE signal
+# for telephony calls. Use delete_room() for SIP connections.
 ```
 
 ### 2. Silence Timeout (Inactivity Detection)
@@ -49,7 +51,9 @@ async def check_timeouts():
     """Monitor silence and end call if inactive"""
     if silence_duration >= SILENCE_TIMEOUT:
         logger.info(f"Ending call due to {SILENCE_TIMEOUT}s silence")
-        await ctx.shutdown(reason="Inactivity timeout")
+        await ctx.api.room.delete_room(
+            api.DeleteRoomRequest(room=ctx.room.name)
+        )
 ```
 
 ### 3. Absolute Time Limit (Hard Cutoff)
@@ -62,7 +66,9 @@ async def check_timeouts():
     """Monitor total call duration"""
     if total_duration >= MAX_CALL_DURATION:
         logger.info(f"Ending call due to {MAX_CALL_DURATION}s duration limit")
-        await ctx.shutdown(reason="Maximum duration reached")
+        await ctx.api.room.delete_room(
+            api.DeleteRoomRequest(room=ctx.room.name)
+        )
 ```
 
 ---
@@ -89,7 +95,9 @@ async def entrypoint(ctx: JobContext):
     async def force_end_call(reason: str):
         """Properly terminate both LiveKit room and SIP connection"""
         logger.info(f"Force ending call: {reason}")
-        await ctx.shutdown(reason=reason)
+        await ctx.api.room.delete_room(
+            api.DeleteRoomRequest(room=ctx.room.name)
+        )
 
     # Timeout monitoring loop
     async def check_timeouts():
@@ -218,8 +226,10 @@ async def end_call():
 
     logger.info("End call tool invoked - terminating session")
 
-    # Use ctx.shutdown() for proper SIP termination
-    await ctx.shutdown(reason="Conversation completed")
+    # Use delete_room() for proper SIP termination
+    await ctx.api.room.delete_room(
+        api.DeleteRoomRequest(room=ctx.room.name)
+    )
 
     return "Call ended successfully"
 ```
@@ -311,12 +321,12 @@ python cleanup_stuck_calls.py
 
 **Possible causes:**
 1. Timeout monitoring task is crashing silently
-2. `ctx.shutdown()` isn't being awaited properly
+2. `delete_room()` isn't being awaited properly
 3. LiveKit SIP BYE signaling bug (known Issue #353)
 
 **Solutions:**
 - Add extensive logging to timeout monitoring
-- Wrap `ctx.shutdown()` in try/except with logging
+- Wrap `delete_room()` in try/except with logging
 - Contact LiveKit support about SIP integration
 - Consider adding external monitoring that calls cleanup script
 
@@ -371,7 +381,7 @@ python cleanup_stuck_calls.py
 
 When creating a new agent:
 
-- [ ] Use `ctx.shutdown(reason)` for call termination (NOT `delete_room()`)
+- [ ] Use `delete_room()` for call termination to properly send SIP BYE signal
 - [ ] Implement 45-second silence timeout
 - [ ] Implement 10-minute absolute timeout
 - [ ] Add participant_connected event for greeting synchronization

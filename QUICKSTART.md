@@ -14,14 +14,14 @@ PURPOSE: [What the agent should do - be specific]
 STYLE: [How it should sound]
 ```
 
-### Example 1: Insurance Broker
+### Example 1: Consulting Business
 
 ```
 Create an agent for:
-OWNER: Robert
-BUSINESS: Insurance broker
-LANGUAGE: Svenska
-PURPOSE: Handle missed calls. Understand why they're calling, get their name and phone number, say Robert will call back. Don't try to help with insurance questions.
+OWNER: Alex
+BUSINESS: Business consulting
+LANGUAGE: English
+PURPOSE: Handle missed calls. Understand why they're calling, get their name and phone number, say the consultant will call back. Don't try to answer detailed consulting questions.
 STYLE: Professional but warm, conversational, not pushy
 ```
 
