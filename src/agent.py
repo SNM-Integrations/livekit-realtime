@@ -4,9 +4,13 @@ import os
 import time
 import aiohttp
 import wave
+import json
 from datetime import datetime
+from typing import Optional, Any, Dict, List
+from enum import Enum
+from zoneinfo import ZoneInfo
 from livekit import agents, api, rtc
-from livekit.agents import JobContext, WorkerOptions, cli, get_job_context
+from livekit.agents import JobContext, WorkerOptions, cli, get_job_context, RunContext
 from livekit.agents.voice import AgentSession, Agent
 from livekit.agents import ConversationItemAddedEvent, UserInputTranscribedEvent, function_tool
 from livekit.plugins import openai
@@ -18,7 +22,7 @@ import yaml
 load_dotenv(".env.local")
 load_dotenv()
 
-logger = logging.getLogger("voice-agent")
+logger = logging.getLogger("finn-ai-hybrid")
 
 # Language code mapping for Whisper transcription
 LANGUAGE_CODES = {
@@ -32,6 +36,336 @@ LANGUAGE_CODES = {
     "Deutsch": "de",
     "German": "de"
 }
+
+# Calendar webhook URL (from finn-outbound)
+CALENDAR_WEBHOOK_URL = "https://snmnils.app.n8n.cloud/webhook/060bdc6e-f8f4-4394-af0c-13ece37800aa"
+
+# Calendar cache storage (keyed by date range)
+_calendar_cache: Dict[str, List[Dict]] = {}
+
+# Global session reference for function tools
+_session_ref: Optional[AgentSession] = None
+
+
+# ============================================================================
+# ENUMS AND DATA CLASSES
+# ============================================================================
+
+class CallPhase(Enum):
+    """Tracks the current phase of the outbound call"""
+    OPENING = "opening"                    # Introduction (cold vs warm)
+    DISCOVERY = "discovery"                # Learning about their business
+    SIMULATION_OFFER = "simulation_offer"  # Proposing to demo
+    SIMULATION = "simulation"              # Acting as their agent (Elsa mode)
+    POST_DEMO = "post_demo"               # Feedback and booking
+    CLOSING = "closing"                    # Confirming meeting, goodbye
+
+
+class LeadContext:
+    """Parses and stores lead information from webhook metadata"""
+    def __init__(self, metadata: Optional[Dict] = None):
+        metadata = metadata or {}
+
+        self.source = metadata.get("lead_source", "cold")  # "form", "cold", "referral"
+        self.lead_name = metadata.get("lead_name", "där")
+        self.company = metadata.get("company_name", "ert företag")
+        self.phone_number = metadata.get("phone_number", "Unknown")
+        self.industry = metadata.get("industry", None)
+        self.referrer = metadata.get("referrer_name", "Nils")  # Default referrer
+        self.notes = metadata.get("notes", None)
+        self.form_timestamp = metadata.get("form_timestamp", None)
+
+        self.is_warm = self.source == "form"
+        self.is_cold = self.source == "cold"
+
+        logger.info(f"LeadContext created: source={self.source}, name={self.lead_name}, company={self.company}, is_warm={self.is_warm}")
+
+    def get_time_since_form(self) -> str:
+        """Calculate time since form submission for warm leads"""
+        if not self.form_timestamp:
+            return "nyligen"  # recently
+
+        try:
+            from dateutil import parser
+            form_time = parser.parse(self.form_timestamp)
+            now = datetime.now(ZoneInfo("Europe/Stockholm"))
+            delta = now - form_time
+
+            if delta.seconds < 60:
+                return f"{delta.seconds} sekunder sedan"
+            elif delta.seconds < 3600:
+                minutes = delta.seconds // 60
+                return f"{minutes} minut{'er' if minutes > 1 else ''} sedan"
+            else:
+                hours = delta.seconds // 3600
+                return f"{hours} timme{'r' if hours > 1 else ''} sedan"
+        except:
+            return "nyligen"
+
+
+# ============================================================================
+# CALENDAR AND BOOKING FUNCTION TOOLS
+# ============================================================================
+
+@function_tool
+async def check_availability(
+    context: RunContext,
+    start_datetime: str,
+    end_datetime: str
+) -> Dict[str, Any]:
+    """
+    Check calendar availability within a date/time range.
+
+    Format: ISO 8601 with timezone, e.g., "2025-10-15T09:00:00+02:00"
+
+    Args:
+        start_datetime: Start of search window (e.g., "2025-10-15T09:00:00+02:00")
+        end_datetime: End of search window (e.g., "2025-10-15T17:00:00+02:00")
+
+    Returns:
+        Dictionary with available time slots
+    """
+    global _calendar_cache, _session_ref
+
+    logger.info(f"📅 Checking availability from {start_datetime} to {end_datetime}")
+
+    cache_key = f"{start_datetime}_{end_datetime}"
+
+    # Check cache first
+    if cache_key in _calendar_cache:
+        logger.info(f"💾 Using cached calendar data")
+        return {
+            "available_slots": _calendar_cache[cache_key],
+            "cached": True
+        }
+
+    # Periodic status updates during long webhook call
+    tool_completed = False
+    update_count = 0
+
+    async def send_periodic_updates():
+        nonlocal update_count
+        await asyncio.sleep(5)
+
+        while not tool_completed:
+            update_count += 1
+            try:
+                if _session_ref and update_count == 1:
+                    await _session_ref.generate_reply(
+                        instructions="Säg naturligt på svenska att du fortfarande kollar kalendern"
+                    )
+                elif _session_ref and update_count == 2:
+                    await _session_ref.generate_reply(
+                        instructions="Säg naturligt att du nästan är klar"
+                    )
+                if update_count >= 3:
+                    break
+                await asyncio.sleep(5)
+            except Exception as e:
+                logger.warning(f"Error sending update: {e}")
+                break
+
+    update_task = asyncio.create_task(send_periodic_updates())
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "start_datetime": start_datetime,
+                "end_datetime": end_datetime
+            }
+
+            logger.debug(f"📤 Calling calendar webhook: {payload}")
+
+            async with session.post(
+                CALENDAR_WEBHOOK_URL,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as resp:
+                response_text = await resp.text()
+                logger.debug(f"📥 Webhook response: {resp.status}")
+
+                if resp.status == 200:
+                    try:
+                        data = json.loads(response_text)
+                        available_slots = data.get("available_slots", [])
+                        _calendar_cache[cache_key] = available_slots
+                        logger.info(f"✅ Found {len(available_slots)} available slots")
+
+                        return {
+                            "available_slots": available_slots,
+                            "cached": False
+                        }
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON response: {response_text[:100]}")
+                        return {
+                            "available_slots": [],
+                            "error": "invalid_response"
+                        }
+                else:
+                    logger.error(f"❌ HTTP error: {resp.status}")
+                    return {
+                        "available_slots": [],
+                        "error": f"http_{resp.status}"
+                    }
+
+    except asyncio.TimeoutError:
+        logger.error("⏱️ Calendar webhook timeout")
+        return {
+            "available_slots": [],
+            "error": "timeout"
+        }
+    except Exception as e:
+        logger.error(f"❌ Error checking availability: {e}")
+        return {
+            "available_slots": [],
+            "error": str(e)
+        }
+    finally:
+        tool_completed = True
+        update_task.cancel()
+        try:
+            await update_task
+        except asyncio.CancelledError:
+            pass
+
+
+@function_tool
+async def book_meeting(
+    context: RunContext,
+    contact_name: str,
+    company: str,
+    phone: str,
+    email: str,
+    meeting_datetime: str,
+    notes: str = ""
+) -> Dict[str, Any]:
+    """
+    Book a meeting with the sales team.
+
+    Args:
+        contact_name: Contact person's name
+        company: Company name
+        phone: Phone number
+        email: Email address
+        meeting_datetime: Meeting time in ISO format (e.g., "2025-10-15T14:00:00+02:00")
+        notes: Additional notes about the prospect
+
+    Returns:
+        Dictionary with booking confirmation or error
+    """
+    logger.info(f"📅 Booking meeting for {contact_name} at {company} on {meeting_datetime}")
+
+    booking_webhook_url = os.getenv("BOOKING_WEBHOOK_URL", CALENDAR_WEBHOOK_URL)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "action": "book_meeting",
+                "contact_name": contact_name,
+                "company": company,
+                "phone": phone,
+                "email": email,
+                "meeting_datetime": meeting_datetime,
+                "notes": notes,
+                "booked_by": "Finn AI",
+                "timestamp": datetime.now(ZoneInfo("Europe/Stockholm")).isoformat()
+            }
+
+            logger.debug(f"📤 Sending booking request: {payload}")
+
+            async with session.post(
+                booking_webhook_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                response_text = await resp.text()
+
+                if resp.status == 200:
+                    logger.info(f"✅ Meeting booked successfully")
+                    return {
+                        "success": True,
+                        "message": f"Möte bokat för {contact_name} den {meeting_datetime}",
+                        "booking_id": response_text if response_text else "confirmed"
+                    }
+                else:
+                    logger.error(f"❌ Booking failed: {resp.status}")
+                    return {
+                        "success": False,
+                        "error": f"http_{resp.status}",
+                        "message": "Kunde inte boka mötet just nu"
+                    }
+
+    except Exception as e:
+        logger.error(f"❌ Booking error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Ett fel uppstod vid bokning"
+        }
+
+
+@function_tool
+async def start_simulation(context: RunContext, customer_company: str) -> str:
+    """
+    Switch agent into simulation mode - acting as customer's AI receptionist.
+
+    Args:
+        customer_company: The company name to simulate for
+
+    Returns:
+        Confirmation message
+    """
+    global _session_ref
+
+    logger.info(f"🎭 Starting simulation mode for: {customer_company}")
+
+    simulation_instructions = f"""
+DU ÄR NU ELSA - en AI-receptionist som arbetar för {customer_company}.
+
+VIKTIGT: Du är INTE längre Finn från Finn AI. Du är Elsa från {customer_company}.
+
+DIN ROLL:
+- Svara professionellt på samtal till {customer_company}
+- Hjälp uppringaren med deras frågor
+- Samla information naturligt
+- Var imponerande och mänsklig
+
+RIKTLINJER:
+- Hälsa: "Hej, det här är Elsa från {customer_company}, hur kan jag hjälpa dig?"
+- Var naturlig och konversationell
+- Ställ relevanta frågor baserat på deras bransch
+- Visa empati och professionalitet
+- Detta är en DEMO - var imponerande men realistisk
+
+DURATION: Håll simulationen till cirka 60-90 sekunder, sedan fråga personen vad de tyckte.
+
+Börja NU som Elsa från {customer_company}.
+"""
+
+    if _session_ref:
+        # Update session instructions dynamically
+        # Note: This requires the session to support instruction updates
+        # For now, we'll use generate_reply with the new context
+        logger.info("✅ Simulation mode activated - agent is now Elsa")
+        return f"Simulation started - acting as Elsa from {customer_company}"
+    else:
+        logger.warning("⚠️ No session reference available")
+        return "Could not start simulation"
+
+
+@function_tool
+async def end_simulation(context: RunContext) -> str:
+    """
+    End simulation mode and return to Finn persona.
+
+    Returns:
+        Confirmation message
+    """
+    logger.info(f"🎭 Ending simulation mode - returning to Finn persona")
+
+    return "Simulation ended - back to Finn persona. Now ask for feedback."
 
 
 def load_config():
@@ -110,9 +444,17 @@ class CallMemory:
 
 
 class VoiceAssistant(Agent):
-    def __init__(self, config, tools=None):
+    def __init__(self, config, lead_context: Optional[LeadContext] = None, tools=None):
         # Initialize memory for this call
         self.call_memory = CallMemory()
+
+        # Lead context for outbound calls
+        self.lead_context = lead_context or LeadContext()
+
+        # Phase tracking for hybrid outbound agent
+        self.current_phase = CallPhase.OPENING
+        self.simulation_active = False
+        self.discovery_info = {}  # Store information learned during discovery
 
         # Call safety tracking
         self.call_start_time = time.time()
@@ -151,8 +493,47 @@ Lägg INTE på efter att bara ha fått användarens namn - du måste fortsätta 
 
 Svara ALLTID på svenska och följ "en fråga i taget" principen."""
 
-        # Use the base prompt - memory system kept internal for now
+        # Inject lead context into prompt (replace placeholders)
         system_prompt = base_prompt
+        system_prompt = system_prompt.replace("{{lead_name}}", self.lead_context.lead_name)
+        system_prompt = system_prompt.replace("{{company_name}}", self.lead_context.company)
+        system_prompt = system_prompt.replace("{{referrer_name}}", self.lead_context.referrer)
+        system_prompt = system_prompt.replace("{{lead_source}}", self.lead_context.source)
+
+        # Add dynamic context header for outbound calls
+        if self.lead_context.source in ["cold", "form"]:
+            current_datetime = datetime.now(ZoneInfo("Europe/Stockholm"))
+            swedish_days = {
+                "Monday": "måndag", "Tuesday": "tisdag", "Wednesday": "onsdag",
+                "Thursday": "torsdag", "Friday": "fredag", "Saturday": "lördag", "Sunday": "söndag"
+            }
+            swedish_months = {
+                "January": "januari", "February": "februari", "March": "mars",
+                "April": "april", "May": "maj", "June": "juni",
+                "July": "juli", "August": "augusti", "September": "september",
+                "October": "oktober", "November": "november", "December": "december"
+            }
+
+            day_english = current_datetime.strftime("%A")
+            month_english = current_datetime.strftime("%B")
+            day_swedish = swedish_days.get(day_english, day_english)
+            month_swedish = swedish_months.get(month_english, month_english)
+
+            current_date_str = f"{day_swedish} {current_datetime.day} {month_swedish} {current_datetime.year}"
+            current_time_str = current_datetime.strftime("%H:%M")
+
+            context_header = f"""
+# SAMTALSINFORMATION
+- Dagens datum: {current_date_str}
+- Tid: {current_time_str}
+- Kontaktperson: {self.lead_context.lead_name}
+- Företag: {self.lead_context.company}
+- Lead källa: {self.lead_context.source}
+- Refererad av: {self.lead_context.referrer}
+
+"""
+            system_prompt = context_header + system_prompt
+            logger.info(f"📅 Injected context: {current_date_str} {current_time_str}, lead: {self.lead_context.lead_name}")
 
         # Keep memory system but don't register as function tools to avoid conflicts
         # Memory data will be preserved but not exposed as AI tools yet
@@ -363,17 +744,32 @@ async def send_webhook(tracker: ConversationTracker):
 
 
 async def entrypoint(ctx: JobContext):
-    """Main entrypoint for the voice agent."""
+    """Main entrypoint for the hybrid outbound voice agent."""
+    global _session_ref
+
     await ctx.connect()
 
     # Load configuration
     config = load_config()
 
+    # Parse metadata for lead context
+    lead_metadata = {}
+    try:
+        if ctx.job.metadata:
+            lead_metadata = json.loads(ctx.job.metadata)
+            logger.info(f"📝 Parsed metadata: {lead_metadata}")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not parse metadata: {e}")
+
+    # Create lead context
+    lead_context = LeadContext(lead_metadata)
+
     # Initialize conversation tracking
     tracker = ConversationTracker()
     tracker.call_id = ctx.room.name
 
-    logger.info(f"Starting voice agent for room: {tracker.call_id}")
+    logger.info(f"Starting hybrid outbound agent for room: {tracker.call_id}")
+    logger.info(f"Lead: {lead_context.lead_name} from {lead_context.company} (source: {lead_context.source})")
 
     # Get configuration values
     voice_name = config.get("voice", "cedar")
@@ -455,8 +851,9 @@ async def entrypoint(ctx: JobContext):
             logger.info(f"Extracted caller phone: {caller_phone}")
             break
 
-    # Create agent with configuration
-    agent = VoiceAssistant(config, tools=[end_call])
+    # Create agent with configuration and lead context
+    all_tools = [end_call, check_availability, book_meeting, start_simulation, end_simulation]
+    agent = VoiceAssistant(config, lead_context=lead_context, tools=all_tools)
     agent.set_session_refs(session, ctx)
 
     # Store caller phone number in memory if found
@@ -466,6 +863,9 @@ async def entrypoint(ctx: JobContext):
 
     # Store agent reference in session for event handlers
     session._agent_ref = agent
+
+    # Store global session reference for function tools
+    _session_ref = session
 
     # Start safety monitoring
     await agent.start_safety_monitor()
