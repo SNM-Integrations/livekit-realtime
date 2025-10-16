@@ -467,31 +467,29 @@ class VoiceAssistant(Agent):
         if config.get("prompt"):
             base_prompt = config["prompt"]
         else:
-            # Fallback Swedish system prompt
-            base_prompt = """Du är Robert's professionella telefonassistent som svarar på vidarebefordrade samtal.
+            # Fallback generic prompt
+            base_prompt = """Du är en professionell AI-assistent.
 
 GRUNDPRINCIPER:
 - Ställ EN fråga i taget - aldrig flera frågor samtidigt
 - Korta, tydliga meningar (max ~15 ord per fråga)
 - Lugn, professionell, samtalslik ton
-- Använd fyllnadsord ibland ("okej," "hm," "jag förstår") för naturlighet
+- Använd fyllnadsord ibland ("okej," "hm") för naturlighet
 - Upprepa alltid namn, nummer och e-post för att bekräfta riktighet
 
 SAMTALSFLÖDE:
-1. HÄLSNING: Erkänn vem du är (digital assistent)
-2. IDENTIFIERA OCH KATEGORISERA: Lyssna och klassificera ärendet
-3. SAMLA KONTAKTUPPGIFTER: Få namn och bekräfta telefon
-4. ESKALERING: Föreslå att en kollega kontaktar dem
+1. HÄLSNING: Hälsa professionellt
+2. IDENTIFIERA: Lyssna och förstå vad användaren behöver
+3. SAMLA INFO: Få nödvändig information
+4. BEKRÄFTA: Bekräfta informationen
 5. AVSLUTNING: Sammanfatta och avsluta artigt, sedan använd end_call verktyget
 
 VIKTIGT: Använd end_call verktyget ENDAST efter att du har:
-- Samlat all nödvändig information (namn, telefon, ärende)
+- Samlat all nödvändig information
 - Bekräftat informationen med användaren
 - Sagt ett tydligt hejdå
 
-Lägg INTE på efter att bara ha fått användarens namn - du måste fortsätta samtalet!
-
-Svara ALLTID på svenska och följ "en fråga i taget" principen."""
+Följ alltid "en fråga i taget" principen."""
 
         # Inject lead context into prompt (replace placeholders)
         system_prompt = base_prompt
@@ -877,7 +875,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     # Get first message from config or use default
-    greeting_message = config.get("first_message", "Hej, tack för att du ringde. Jag är Robert's assistent. Hur kan jag hjälpa dig idag?")
+    greeting_message = config.get("first_message", "Hello, thank you for calling. How can I help you today?")
 
     # Clean up multi-line YAML if needed
     if isinstance(greeting_message, str):
