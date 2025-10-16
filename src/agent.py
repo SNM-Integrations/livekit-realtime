@@ -370,7 +370,10 @@ async def end_simulation(context: RunContext) -> str:
 
 def load_config():
     """Load configuration from config/agent.creation.md"""
-    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "agent.creation.md")
+    # In Docker, agent.py is at /app/agent.py and config is at /app/config/
+    # Use the app directory (where agent.py is) as the base
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(app_dir, "config", "agent.creation.md")
 
     try:
         with open(config_path, 'r', encoding='utf-8') as file:
