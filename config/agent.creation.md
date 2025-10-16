@@ -2,7 +2,7 @@
 
 # === BASIC SETTINGS ===
 language: "Svenska"
-voice: "shimmer"
+voice: "marin"
 workflow_type: "hybrid_outbound"
 personality_traits: "friendly, professional, confident, natural, conversational"
 
@@ -19,7 +19,7 @@ agents:
     name: "FinnOutboundAgent"
     personality: "friendly, professional, confident, natural"
     specialization: "outbound_sales_demo"
-    voice: "shimmer"
+    voice: "marin"
 
 # === OUTBOUND SPECIFIC SETTINGS ===
 outbound_config:
