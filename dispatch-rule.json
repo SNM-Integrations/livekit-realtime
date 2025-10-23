@@ -1,0 +1,17 @@
+{
+  "name": "Route-to-Nils-Agent",
+  "trunk_ids": ["ST_b4rDnPbF2WCF"],
+  "rule": {
+    "dispatch_rule_caller": {
+      "room_prefix": "nils-call-",
+      "randomize": true
+    }
+  },
+  "room_config": {
+    "agents": [
+      {
+        "agent_name": "CA_QYLXQNBkzr2c"
+      }
+    ]
+  }
+}

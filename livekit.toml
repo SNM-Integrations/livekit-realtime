@@ -6,7 +6,7 @@
 # Example: if your URL is wss://my-project-abc123.livekit.cloud
 # then subdomain = "my-project-abc123"
 # Run `lk project list` to see your projects and get the subdomain
-subdomain = "robin-d8vgyqc5"
+subdomain = "samuels-agent-qyhykxsz"
 
 [build]
 # Python file to run (don't change unless you rename files)
@@ -15,10 +15,10 @@ requirements = "requirements.txt"
 
 [agent]
 # Agent ID from LiveKit Cloud (auto-generated when you run `lk agent create`)
-id = "CA_EDm9tb8ketTH"
+id = "CA_QYLXQNBkzr2c"
 
 # Display name for your agent in LiveKit Cloud dashboard
-name = "Robin's Personal Assistant"
+name = "finn-hybrid-outbound"
 
 # Agent type - "voice" for phone/audio agents
 type = "voice"

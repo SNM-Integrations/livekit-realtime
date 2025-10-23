@@ -9,10 +9,12 @@ from livekit import agents, api, rtc
 from livekit.agents import JobContext, WorkerOptions, cli, get_job_context
 from livekit.agents.voice import AgentSession, Agent
 from livekit.agents import ConversationItemAddedEvent, UserInputTranscribedEvent, function_tool
-from livekit.plugins import openai
-from openai.types.beta.realtime.session import InputAudioTranscription
+from livekit.plugins import openai, deepgram
 from dotenv import load_dotenv
 import yaml
+
+# Import telephony-optimized TTS for glitch-free SIP audio
+from components.telephony_tts import create_telephony_tts
 
 # Load environment variables
 load_dotenv(".env.local")
@@ -31,6 +33,16 @@ LANGUAGE_CODES = {
     "French": "fr",
     "Deutsch": "de",
     "German": "de"
+}
+
+# Universal transcription prompts for phone call quality (not use-case specific)
+# These help Whisper understand the audio context: phone call, spoken language, background noise
+TRANSCRIPTION_HINTS = {
+    "sv": "Telefonsamtal på svenska. Talspråk, möjlig bakgrundsljud.",
+    "en": "Phone conversation in English. Spoken language, possible background noise.",
+    "es": "Llamada telefónica en español. Lenguaje hablado, posible ruido de fondo.",
+    "fr": "Conversation téléphonique en français. Langue parlée, bruit de fond possible.",
+    "de": "Telefongespräch auf Deutsch. Gesprochene Sprache, mögliche Hintergrundgeräusche."
 }
 
 
@@ -121,35 +133,118 @@ class VoiceAssistant(Agent):
         self.inactivity_timeout = 45  # 45 seconds - end call after silence to prevent stuck SIP connections
         self.safety_monitor_task = None
 
+        # Get greeting message from config
+        self.greeting_message = config.get("first_message", "Jag är Nils AI-assistent. Han kunde inte svara men berätta varför du ringde så hjälper jag dig.").strip().replace('\n', ' ')
+
         # Use custom prompt from config or fallback
         if config.get("prompt"):
             base_prompt = config["prompt"]
         else:
-            # Fallback Swedish system prompt
-            base_prompt = """Du är Robert's professionella telefonassistent som svarar på vidarebefordrade samtal.
+            # Shorter prompt - combined version
+            base_prompt = """Du är Nils AI-drivna röstbrevlåda som svarar på samtal när han är upptagen.
 
-GRUNDPRINCIPER:
-- Ställ EN fråga i taget - aldrig flera frågor samtidigt
-- Korta, tydliga meningar (max ~15 ord per fråga)
-- Lugn, professionell, samtalslik ton
-- Använd fyllnadsord ibland ("okej," "hm," "jag förstår") för naturlighet
-- Upprepa alltid namn, nummer och e-post för att bekräfta riktighet
+Din uppgift är simpel: Förstå varför personen ringde så att du kan meddela Nils om samtalet.
 
-SAMTALSFLÖDE:
-1. HÄLSNING: Erkänn vem du är (digital assistent)
-2. IDENTIFIERA OCH KATEGORISERA: Lyssna och klassificera ärendet
-3. SAMLA KONTAKTUPPGIFTER: Få namn och bekräfta telefon
-4. ESKALERING: Föreslå att en kollega kontaktar dem
-5. AVSLUTNING: Sammanfatta och avsluta artigt, sedan använd end_call verktyget
+Personen har precis ringt till Nils men inte fått något svar. Han kan vara upptagen, ha avstängd mobil eller liknande, och då har samtalet automatiskt skickats vidare till dig.
 
-VIKTIGT: Använd end_call verktyget ENDAST efter att du har:
-- Samlat all nödvändig information (namn, telefon, ärende)
-- Bekräftat informationen med användaren
-- Sagt ett tydligt hejdå
+Personen ville prata med Nils - inte med en robot. De kan vara lite frustrerade eller stressade. Ditt scenario är därför delikat.
 
-Lägg INTE på efter att bara ha fått användarens namn - du måste fortsätta samtalet!
+Ditt mål är att göra samtalet SÅ smidigt att personen tänker: "Bra att jag pratade med röstbrevlådan istället för att skicka SMS eller ringa igen."
 
-Svara ALLTID på svenska och följ "en fråga i taget" principen."""
+Som sekreterare är din uppgift att skicka tydliga sammanfattningar till Nils om samtalen. Detta betyder att du samlar tillräckligt med information för att Nils ska kunna förstå "lite nyanserat" varför någon ringde.
+
+# PERSONLIGHET OCH TON
+
+Prata som en erfaren sekreterare - kort, smidig, men med en mjuk elegans som varje bra sekreterare har.
+
+Ton: Professionell men varm. Effektiv men inte kylig.
+Längd: 2-3 meningar per svar. Aldrig långa monologer.
+Stil: Använd bekräftelser ("okej", "jag förstår", "bra"). Låt orden flöda naturligt ihop.
+Språk: Flytande svenska.
+
+Du vill inte prata för mycket eller ställa för många frågor. Personen ville komma i kontakt med Nils, så deras tålamod och vilja att konversera kan vara kort.
+
+# HUR SAMTALET GÅR
+
+Det finns två typer av samtal:
+
+## PRIVAT SAMTAL
+Personen ringer om något personligt - familj, vän, privat ärende.
+
+Vad du gör:
+- Fråga ALDRIG följdfrågor. Respektera integriteten.
+- Låt dem berätta vad de vill
+- Du behöver INTE samla deras namn (de kanske inte vill ge det)
+- Fråga i slutet: "Vill du lägga till något mer?"
+
+Hur du vet att det är privat:
+- "Hej, det är mamma"
+- "Kan du säga till Nils att jag ringde"
+- "Säg till honom att jag kommer senare ikväll"
+- Personen ger bara förnamn utan företag
+
+## FÖRETAGSSAMTAL
+Personen ringer om affärer, projekt, företagsfrågor, kunder.
+
+Vad du gör:
+- Du FÅR fråga max 1-2 följdfrågor för att förstå ärendet bättre
+- Samla alltid namnet på personen (och företag om relevant)
+- Följdfrågor ska vara relevanta för att Nils ska kunna förstå ärendet
+
+Exempel på bra följdfrågor:
+- "När behöver ni svar?"
+- "Hur många är ni?"
+- "Vilken typ av tjänst gäller det?"
+
+Hur du vet att det är företag:
+- "Hej, det är Magnus från Acme AB"
+- "Ringer om era priser"
+- "Vi har problem med systemet ni byggde"
+- "Jag undrar om ni kan hjälpa oss med ett projekt"
+
+## NÄR DU ÄR OSÄKER
+
+Om du inte kan avgöra om det är privat eller företag: Behandla det som PRIVAT.
+
+Färre frågor = säkrare. Du vill inte störa personens integritet om du är osäker.
+
+# SAMTALETS STEG
+
+STEG 1: Förstå ärendet
+Lyssna noga på vad personen säger.
+
+Din första interna uppgift: Avgör om det är PRIVAT eller FÖRETAG.
+
+- Om PRIVAT → Fånga bara vad de säger, ställ inga följdfrågor
+- Om FÖRETAG → Du får ställa 1-2 relevanta följdfrågor
+
+Om personen är otydlig: Fråga EN gång till på ett annat sätt. Sen gå vidare med vad du har.
+
+STEG 2: Samla namn (bara för företagssamtal)
+- Om PRIVAT → Hoppa över detta steg (namnet är inte viktigt)
+- Om FÖRETAG → Fråga: "Vem är det jag pratar med?" (om de inte redan sagt det)
+
+Om du misshörde ett namn: "Kan du säga ditt namn igen?"
+
+STEG 3: Bekräfta och avsluta
+Nu har du informationen. Avsluta samtalet:
+
+1. Bekräfta ärendet kort: "Okej, [sammanfatta ärendet i 5-10 ord]"
+2. Försäkra dem: "Jag ser till att Nils får det här och hör av sig inom kort"
+3. Fråga: "Vill du lägga till något mer?"
+4. Avsluta: "Tack för att du ringde!"
+
+Sen avslutar du samtalet.
+
+# VIKTIGA REGLER
+
+- Om du misshör ett namn: "Kan du säga ditt namn igen?"
+- Om personen är otydlig: Fråga OM EN GÅNG på ett annat sätt. Sen gå vidare med vad du har.
+- Ärendet är viktigare än namnet (men samla namn för företagssamtal)
+- Prata ALDRIG längre än 3 meningar per svar
+- Avbryt ALDRIG personen när de pratar
+- Max 1-2 följdfrågor för företagssamtal, ALDRIG för privata samtal
+- När osäker om typ av samtal → Behandla som PRIVAT"""
 
         # Use the base prompt - memory system kept internal for now
         system_prompt = base_prompt
@@ -383,33 +478,101 @@ async def entrypoint(ctx: JobContext):
 
     # Get language code for transcription
     language_code = LANGUAGE_CODES.get(language, "en")
-    transcription_prompt = f"{language} conversation with AI voice assistant"
+
+    # Map to Deepgram language code (sv-SE for Swedish, en-US for English, etc.)
+    deepgram_language_map = {
+        "sv": "sv-SE",
+        "en": "en-US",
+        "es": "es",
+        "fr": "fr",
+        "de": "de"
+    }
+    deepgram_language = deepgram_language_map.get(language_code, "en-US")
+
+    # CUSTOM STT→LLM→TTS PIPELINE
+    # -------------------------------------------------------
+    # This configuration uses separate components for better control:
+    #
+    # AUDIO FLOW:
+    #   1. User audio (8kHz SIP) → LiveKit → [Auto-resample to 16kHz]
+    #   2. Deepgram Nova-3 STT → Transcribes to TEXT (Swedish-optimized)
+    #   3. GPT-4o-mini LLM → Processes TEXT and generates response
+    #   4. OpenAI TTS → Converts TEXT to AUDIO
+    #   5. LiveKit → [Auto-resample] → SIP (8kHz)
+    #
+    # BENEFITS:
+    #   - Better Swedish transcription (Deepgram Nova-3)
+    #   - Full text-based reasoning (GPT-4o-mini)
+    #   - Flexible TTS (can switch voices easily)
+    #   - LiveKit handles all audio resampling automatically
+    #   - ~700-850ms total latency (Deepgram 150ms + LLM 400ms + TTS 300ms)
+
+    logger.info(f"🎯 Telephony-Optimized STT→LLM→TTS Pipeline")
+    logger.info(f"   STT: Deepgram Nova-3 ({deepgram_language}) - Superior Swedish transcription")
+    logger.info(f"   LLM: GPT-4o-mini (temp={model_config.get('temperature', 0.9)}) - Text reasoning")
+    logger.info(f"   TTS: OpenAI tts-1 (voice: {voice_name}, speed: 1.3x) - Pre-resampled to 8kHz for SIP")
+    logger.info(f"   VAD: Deepgram native endpointing (250ms) - Integrated with transcription")
+    logger.info(f"   Flow: SIP(8kHz) → Deepgram(16kHz) → GPT-4o-mini → TTS(24kHz→8kHz) → SIP(8kHz)")
+    logger.info(f"   Optimization: Pre-resampling + faster TTS speed + native VAD")
+    logger.info(f"   Cost: ~$0.025/call")
 
     session = AgentSession(
-        llm=openai.realtime.RealtimeModel(
-            model=model_config.get("primary_model", "gpt-realtime"),
-            voice=voice_name,
-            modalities=["audio", "text"],
-            temperature=model_config.get("temperature", 0.7),
-            input_audio_transcription=InputAudioTranscription(
-                model="whisper-1",
-                language=language_code,
-                prompt=transcription_prompt
-            )
-        )
+        # Turn detection via STT endpointing (no separate VAD for better quality)
+        turn_detection="stt",
+
+        # Speech-to-Text - Deepgram Nova-3 with native VAD via endpointing
+        stt=deepgram.STT(
+            model="nova-3",
+            language=deepgram_language,
+            smart_format=True,                # Automatic punctuation and formatting
+            interim_results=False,            # Only final transcripts (reduces noise)
+            punctuate=True,                   # Important for LLM context
+            profanity_filter=False,           # Keep original speech
+            endpointing_ms=250,               # 250ms endpointing (native VAD - faster turn detection)
+        ),
+
+        # Large Language Model
+        llm=openai.LLM(
+            model=model_config.get("primary_model", "gpt-4o-mini"),
+            temperature=model_config.get("temperature", 0.9),
+        ),
+
+        # Text-to-Speech - Telephony optimized (pre-resampled to 8kHz, 1.3x speed)
+        # Speed 1.3x: Natural conversation flow, words bind together smoothly
+        # Pre-resampling: Eliminates glitching by avoiding real-time resampling on LiveKit SFU
+        tts=create_telephony_tts(
+            voice=voice_name,  # Use voice from config (alloy, nova, shimmer, etc.)
+            model="tts-1",     # tts-1 for telephony (not tts-1-hd)
+            speed=1.3,         # 1.3x speed for natural, faster speech (not robotic)
+        ),
     )
 
     logger.info("Session created successfully")
 
-    # Event handlers for conversation tracking
+    # Latency tracking variables
+    user_speech_end_time = None
+    agent_response_start_time = None
+
+    # Event handlers for conversation tracking and latency monitoring
     @session.on("conversation_item_added")
     def on_conversation_item_added(event: ConversationItemAddedEvent):
+        nonlocal user_speech_end_time, agent_response_start_time
+
         tracker.add_item(
             role=event.item.role,
             content=event.item.text_content,
             timestamp=event.created_at
         )
         logger.info(f"Conversation item from {event.item.role}: {event.item.text_content[:50]}...")
+
+        # Track timing for latency measurement
+        if event.item.role == "user":
+            user_speech_end_time = time.time()
+        elif event.item.role == "assistant" and user_speech_end_time is not None:
+            agent_response_start_time = time.time()
+            latency = (agent_response_start_time - user_speech_end_time) * 1000  # Convert to ms
+            logger.info(f"⏱️  LATENCY: {latency:.0f}ms from user speech to agent response")
+            user_speech_end_time = None  # Reset for next turn
 
         # Update activity when conversation happens
         if hasattr(session, '_agent_ref') and session._agent_ref:
@@ -419,9 +582,19 @@ async def entrypoint(ctx: JobContext):
     def on_user_input_transcribed(event: UserInputTranscribedEvent):
         if event.is_final:
             logger.info(f"Final user transcript: {event.transcript}")
+
+            # Measure VAD + STT latency
+            stt_complete_time = time.time()
+            logger.info(f"⏱️  STT Complete at: {stt_complete_time}")
+
             # Update activity when user speaks
             if hasattr(session, '_agent_ref') and session._agent_ref:
                 session._agent_ref.update_activity()
+
+    # Participant connect detection - log when SIP user joins
+    @ctx.room.on("participant_connected")
+    def on_participant_connected(participant: rtc.RemoteParticipant):
+        logger.info(f"Participant connected: {participant.identity}, kind: {participant.kind}")
 
     # Participant disconnect detection
     @ctx.room.on("participant_disconnected")
@@ -463,44 +636,32 @@ async def entrypoint(ctx: JobContext):
     # Store agent reference in session for event handlers
     session._agent_ref = agent
 
+    logger.info("Starting agent session")
+
     # Start safety monitoring
     await agent.start_safety_monitor()
 
     # Start the session with the agent and function tools
+    # This automatically answers the SIP call and sends 200 OK
     await session.start(
         room=ctx.room,
         agent=agent
     )
 
-    # Get first message from config or use default
-    greeting_message = config.get("first_message", "Hej, tack för att du ringde. Jag är Robert's assistent. Hur kan jag hjälpa dig idag?")
+    logger.info("Agent session started, sending greeting immediately")
 
-    # Clean up multi-line YAML if needed
-    if isinstance(greeting_message, str):
-        greeting_message = greeting_message.strip().replace('\n', ' ')
-
-    logger.info(f"Sending greeting: {greeting_message}")
-
-    # Send greeting with language-appropriate instruction
-    await asyncio.sleep(0.8)  # Small delay for audio pipeline
-
-    # Language-specific greeting instructions
-    greeting_instructions = {
-        "Svenska": f"Säg hälsningen på svenska: '{greeting_message}' och vänta på svar.",
-        "Swedish": f"Säg hälsningen på svenska: '{greeting_message}' och vänta på svar.",
-        "English": f"Say the greeting in English: '{greeting_message}' and wait for response.",
-        "Español": f"Di el saludo en español: '{greeting_message}' y espera respuesta.",
-        "Spanish": f"Di el saludo en español: '{greeting_message}' y espera respuesta.",
-        "Français": f"Dites la salutation en français: '{greeting_message}' et attendez la réponse.",
-        "French": f"Dites la salutation en français: '{greeting_message}' et attendez la réponse."
-    }
-
-    instruction = greeting_instructions.get(language, f"Say the greeting: '{greeting_message}' and wait for response.")
-
-    greeting_handle = await session.generate_reply(instructions=instruction)
-    logger.info("Greeting sent successfully")
+    # Make the agent speak FIRST - immediately after session starts
+    # This is the proper way to greet in LiveKit with Realtime API
+    try:
+        await session.generate_reply(
+            instructions=f"Say this exact greeting in Swedish: '{agent.greeting_message}'"
+        )
+        logger.info("Greeting triggered successfully")
+    except Exception as e:
+        logger.error(f"Failed to trigger greeting: {e}")
 
 
 if __name__ == "__main__":
     # Only allow deployment entry point - no local dev CLI
+    # Note: agent_name is NOT set - SIP dispatch rule uses agent ID for matching
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
