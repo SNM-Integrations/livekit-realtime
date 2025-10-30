@@ -1,5 +1,5 @@
 language: "Svenska"
-voice: "alloy"
+voice: "marin"
 
 first_message: >
   Jag är Nils AI-assistent. Han kunde inte svara men berätta varför du ringde så hjälper jag dig.

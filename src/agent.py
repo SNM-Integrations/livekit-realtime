@@ -9,7 +9,7 @@ from livekit import agents, api, rtc
 from livekit.agents import JobContext, WorkerOptions, cli, get_job_context
 from livekit.agents.voice import AgentSession, Agent
 from livekit.agents import ConversationItemAddedEvent, UserInputTranscribedEvent, function_tool
-from livekit.plugins import openai, deepgram
+from livekit.plugins import openai, deepgram, silero
 from dotenv import load_dotenv
 import yaml
 
@@ -508,27 +508,39 @@ async def entrypoint(ctx: JobContext):
     #   - ~700-850ms total latency (Deepgram 150ms + LLM 400ms + TTS 300ms)
 
     logger.info(f"🎯 Telephony-Optimized STT→LLM→TTS Pipeline")
-    logger.info(f"   STT: Deepgram Nova-3 ({deepgram_language}) - Superior Swedish transcription")
+    logger.info(f"   STT: Deepgram Nova-3 ({deepgram_language}) - High-quality transcription")
+    logger.info(f"        interim_results=True, no endpointing (using external VAD)")
     logger.info(f"   LLM: GPT-4o-mini (temp={model_config.get('temperature', 0.9)}) - Text reasoning")
-    logger.info(f"   TTS: OpenAI tts-1 (voice: {voice_name}, speed: 1.3x) - Pre-resampled to 8kHz for SIP")
-    logger.info(f"   VAD: Deepgram native endpointing (250ms) - Integrated with transcription")
-    logger.info(f"   Flow: SIP(8kHz) → Deepgram(16kHz) → GPT-4o-mini → TTS(24kHz→8kHz) → SIP(8kHz)")
-    logger.info(f"   Optimization: Pre-resampling + faster TTS speed + native VAD")
-    logger.info(f"   Cost: ~$0.025/call")
+    logger.info(f"   TTS: gpt-4o-mini-tts (voice: nova, detailed Swedish instructions)")
+    logger.info(f"        Pre-resampled to 8kHz for SIP, buffered for natural prosody")
+    logger.info(f"   VAD: LiveKit Silero VAD - Optimized for turn-taking and barge-in")
+    logger.info(f"        min_speech=200ms, min_silence=600ms, threshold=0.5")
+    logger.info(f"   Flow: SIP(8kHz) → Silero VAD → Deepgram(16kHz) → GPT-4o-mini → TTS(24kHz→8kHz) → SIP(8kHz)")
+    logger.info(f"   Optimization: Silero VAD + buffered TTS + 8kHz pre-resampling")
+    logger.info(f"   Cost: ~$0.025-$0.045/call")
 
     session = AgentSession(
-        # Turn detection via STT endpointing (no separate VAD for better quality)
-        turn_detection="stt",
+        # Turn detection via LiveKit Silero VAD (better than STT endpointing for calls)
+        # Handles echo cancellation, barge-in, and turn-taking reliably
+        vad=silero.VAD.load(
+            min_speech_duration=0.2,        # 200ms minimum speech to start detection
+            min_silence_duration=0.6,       # 600ms silence to end turn (handles pauses)
+            prefix_padding_duration=0.4,    # 400ms padding before speech (catch speech start)
+            activation_threshold=0.5,       # Balanced sensitivity for phone audio
+            max_buffered_speech=60.0,       # Allow up to 60s responses
+        ),
+        turn_detection="vad",               # Use VAD for turn detection (not STT endpointing)
 
-        # Speech-to-Text - Deepgram Nova-3 with native VAD via endpointing
+        # Speech-to-Text - Deepgram Nova-3 without endpointing (VAD handles turn detection)
+        # Optimized for quiet speech detection
         stt=deepgram.STT(
             model="nova-3",
             language=deepgram_language,
             smart_format=True,                # Automatic punctuation and formatting
-            interim_results=False,            # Only final transcripts (reduces noise)
+            interim_results=True,             # Enable interim results for better responsiveness
             punctuate=True,                   # Important for LLM context
             profanity_filter=False,           # Keep original speech
-            endpointing_ms=250,               # 250ms endpointing (native VAD - faster turn detection)
+            # NOTE: No endpointing_ms - VAD handles turn detection
         ),
 
         # Large Language Model
@@ -537,13 +549,17 @@ async def entrypoint(ctx: JobContext):
             temperature=model_config.get("temperature", 0.9),
         ),
 
-        # Text-to-Speech - Telephony optimized (pre-resampled to 8kHz, 1.3x speed)
-        # Speed 1.3x: Natural conversation flow, words bind together smoothly
+        # Text-to-Speech - gpt-4o-mini-tts with instructable voice control
+        # Model: gpt-4o-mini-tts (March 2025) - supports voice style prompting
+        # Voice: Marin/Cedar/Alloy with instructions for tone, emotion, pacing
+        # Speed: 1.0 (natural playback - use instructions for pacing, not speed parameter)
         # Pre-resampling: Eliminates glitching by avoiding real-time resampling on LiveKit SFU
         tts=create_telephony_tts(
-            voice=voice_name,  # Use voice from config (alloy, nova, shimmer, etc.)
-            model="tts-1",     # tts-1 for telephony (not tts-1-hd)
-            speed=1.3,         # 1.3x speed for natural, faster speech (not robotic)
+            voice="nova",                   # nova: friendly, clear, most popular (valid for gpt-4o-mini-tts)
+            model="gpt-4o-mini-tts",        # Latest model with voice instructions support
+            speed=1.0,                      # Natural playback speed (not chipmunk-y)
+            instructions="Voice: Warm, empathetic, and professional, reassuring the customer that their issue is understood and will be resolved.\n\nPunctuation: Well-structured with natural pauses, allowing for clarity and a steady, calming flow.\n\nDelivery: Calm and patient, with a supportive and understanding tone that reassures the listener.\n\nIMPORTANT SPEAK SWEDISH\n\nPhrasing: Clear and concise, using customer-friendly language that avoids jargon while maintaining professionalism.\n\nTone: Empathetic and solution-focused, emphasizing both understanding and proactive assistance.",
+            buffer_complete_sentence=True   # Buffer complete TTS synthesis for natural prosody
         ),
     )
 
