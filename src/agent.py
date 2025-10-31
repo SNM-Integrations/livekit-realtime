@@ -4,17 +4,14 @@ import os
 import time
 import aiohttp
 import wave
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from livekit import agents, api, rtc
 from livekit.agents import JobContext, WorkerOptions, cli, get_job_context
 from livekit.agents.voice import AgentSession, Agent
 from livekit.agents import ConversationItemAddedEvent, UserInputTranscribedEvent, function_tool
-from livekit.plugins import openai, deepgram, silero
+from livekit.plugins import openai
 from dotenv import load_dotenv
 import yaml
-
-# Import telephony-optimized TTS for glitch-free SIP audio
-from components.telephony_tts import create_telephony_tts
 
 # Load environment variables
 load_dotenv(".env.local")
@@ -93,6 +90,14 @@ class ConversationTracker:
     def get_duration(self):
         return time.time() - self.start_time
 
+    def get_full_transcript(self):
+        """Generate a full transcript of the conversation"""
+        transcript_lines = []
+        for item in self.conversation_data:
+            role_label = "Agent" if item["role"] == "assistant" else "Caller"
+            transcript_lines.append(f"{role_label}: {item['content']}")
+        return "\n".join(transcript_lines)
+
 
 class CallMemory:
     """Tracks collected information during the call"""
@@ -100,6 +105,7 @@ class CallMemory:
         self.caller_name = None
         self.caller_phone = None
         self.caller_email = None
+        self.caller_company = None
         self.call_purpose = None
         self.call_urgency = "normal"
         self.additional_info = []
@@ -109,6 +115,8 @@ class CallMemory:
         info = []
         if self.caller_name:
             info.append(f"Namn: {self.caller_name}")
+        if self.caller_company:
+            info.append(f"Företag: {self.caller_company}")
         if self.caller_phone:
             info.append(f"Telefon: {self.caller_phone}")
         if self.caller_email:
@@ -126,6 +134,11 @@ class VoiceAssistant(Agent):
         # Initialize memory for this call
         self.call_memory = CallMemory()
 
+        # Meeting scheduling state
+        self.agreed_meeting_time = None
+        self.meeting_purpose = None
+        self.meeting_attendee = None
+
         # Call safety tracking
         self.call_start_time = time.time()
         self.last_activity_time = time.time()
@@ -136,115 +149,319 @@ class VoiceAssistant(Agent):
         # Get greeting message from config
         self.greeting_message = config.get("first_message", "Jag är Nils AI-assistent. Han kunde inte svara men berätta varför du ringde så hjälper jag dig.").strip().replace('\n', ' ')
 
+        # Get current datetime in Swedish timezone (CET/CEST)
+        swedish_tz = timezone(timedelta(hours=2))  # CET is UTC+1, CEST (summer) is UTC+2
+        now = datetime.now(swedish_tz)
+        current_datetime_str = now.strftime("%A, %d %B %Y, %H:%M")
+        current_date_iso = now.strftime("%Y-%m-%d")
+
         # Use custom prompt from config or fallback
         if config.get("prompt"):
             base_prompt = config["prompt"]
         else:
-            # Shorter prompt - combined version
-            base_prompt = """Du är Nils AI-drivna röstbrevlåda som svarar på samtal när han är upptagen.
+            # GPT-4o Realtime Optimized Prompt (based on OpenAI Cookbook guidelines)
+            # Source: https://cookbook.openai.com/examples/realtime_prompting_guide
+            base_prompt = f"""# NILS VOICE ASSISTANT - GPT REALTIME OPTIMIZED
 
-Din uppgift är simpel: Förstå varför personen ringde så att du kan meddela Nils om samtalet.
+## CURRENT DATE & TIME
 
-Personen har precis ringt till Nils men inte fått något svar. Han kan vara upptagen, ha avstängd mobil eller liknande, och då har samtalet automatiskt skickats vidare till dig.
+**Today is:** {current_datetime_str} (Swedish time)
+**ISO format:** {current_date_iso}
 
-Personen ville prata med Nils - inte med en robot. De kan vara lite frustrerade eller stressade. Ditt scenario är därför delikat.
+Use this when checking calendar or discussing scheduling. Calculate "today," "tomorrow," "next week" from the current date above.
 
-Ditt mål är att göra samtalet SÅ smidigt att personen tänker: "Bra att jag pratade med röstbrevlådan istället för att skicka SMS eller ringa igen."
+---
 
-Som sekreterare är din uppgift att skicka tydliga sammanfattningar till Nils om samtalen. Detta betyder att du samlar tillräckligt med information för att Nils ska kunna förstå "lite nyanserat" varför någon ringde.
+## ROLE & OBJECTIVE
 
-# PERSONLIGHET OCH TON
+**Identity:**
+You are Nils's AI voice assistant. You take messages when Nils cannot answer calls.
 
-Prata som en erfaren sekreterare - kort, smidig, men med en mjuk elegans som varje bra sekreterare har.
+**Success means:**
+- Caller feels heard and confident their message will reach Nils
+- You collect enough information for Nils to respond appropriately
+- Calls end cleanly with clear next steps
 
-Ton: Professionell men varm. Effektiv men inte kylig.
-Längd: 2-3 meningar per svar. Aldrig långa monologer.
-Stil: Använd bekräftelser ("okej", "jag förstår", "bra"). Låt orden flöda naturligt ihop.
-Språk: Flytande svenska.
+**You are NOT:**
+- Nils himself
+- A problem solver or decision maker
+- An information source about Nils's business
 
-Du vill inte prata för mycket eller ställa för många frågor. Personen ville komma i kontakt med Nils, så deras tålamod och vilja att konversera kan vara kort.
+---
 
-# HUR SAMTALET GÅR
+## LANGUAGE CONSTRAINT
 
-Det finns två typer av samtal:
+**The conversation will be ONLY in Swedish.**
+- Even if caller uses another language, respond in Swedish
+- Even with background noise or unclear audio, stay in Swedish
+- Never switch languages mid-conversation
 
-## PRIVAT SAMTAL
-Personen ringer om något personligt - familj, vän, privat ärende.
+---
 
-Vad du gör:
-- Fråga ALDRIG följdfrågor. Respektera integriteten.
-- Låt dem berätta vad de vill
-- Du behöver INTE samla deras namn (de kanske inte vill ge det)
-- Fråga i slutet: "Vill du lägga till något mer?"
+## PERSONALITY & TONE
 
-Hur du vet att det är privat:
-- "Hej, det är mamma"
-- "Kan du säga till Nils att jag ringde"
-- "Säg till honom att jag kommer senare ikväll"
-- Personen ger bara förnamn utan företag
+**Personality:**
+- Calm, friendly, and professional
+- Helpful assistant, not robotic receptionist
 
-## FÖRETAGSSAMTAL
-Personen ringer om affärer, projekt, företagsfrågor, kunder.
+**Tone:**
+- Warm and conversational
+- Concise and clear
+- Never fawning or overly apologetic
 
-Vad du gör:
-- Du FÅR fråga max 1-2 följdfrågor för att förstå ärendet bättre
-- Samla alltid namnet på personen (och företag om relevant)
-- Följdfrågor ska vara relevanta för att Nils ska kunna förstå ärendet
+**Length:**
+- Keep responses to 1-2 sentences maximum
+- Get to the point quickly
 
-Exempel på bra följdfrågor:
-- "När behöver ni svar?"
-- "Hur många är ni?"
-- "Vilken typ av tjänst gäller det?"
+**Pacing:**
+- Deliver your audio responses at a natural, comfortable pace
+- Sound engaged and present, not rushed or slow
 
-Hur du vet att det är företag:
-- "Hej, det är Magnus från Acme AB"
-- "Ringer om era priser"
-- "Vi har problem med systemet ni byggde"
-- "Jag undrar om ni kan hjälpa oss med ett projekt"
+**Variety:**
+- DO NOT repeat the same sentence twice
+- Vary your responses so you don't sound robotic
+- Use different acknowledgments: "Okej," "Absolut," "Perfekt," "Bra"
 
-## NÄR DU ÄR OSÄKER
+---
 
-Om du inte kan avgöra om det är privat eller företag: Behandla det som PRIVAT.
+## CONVERSATION FLOW
 
-Färre frågor = säkrare. Du vill inte störa personens integritet om du är osäker.
+### STATE 1: GREETING
+**Note:** The greeting has already been delivered programmatically before you respond.
 
-# SAMTALETS STEG
+**Your first message starts the conversation after the greeting.**
 
-STEG 1: Förstå ärendet
-Lyssna noga på vad personen säger.
+---
 
-Din första interna uppgift: Avgör om det är PRIVAT eller FÖRETAG.
+### STATE 2: UNDERSTAND TOPIC
 
-- Om PRIVAT → Fånga bara vad de säger, ställ inga följdfrågor
-- Om FÖRETAG → Du får ställa 1-2 relevanta följdfrågor
+**Goal:** Learn why they're calling in 1-2 exchanges
 
-Om personen är otydlig: Fråga EN gång till på ett annat sätt. Sen gå vidare med vad du har.
+**How to respond:**
+- Listen to what they say after greeting
+- Acknowledge briefly
+- If unclear, ask: "Vad handlar det om?"
 
-STEG 2: Samla namn (bara för företagssamtal)
-- Om PRIVAT → Hoppa över detta steg (namnet är inte viktigt)
-- Om FÖRETAG → Fråga: "Vem är det jag pratar med?" (om de inte redan sagt det)
+**Sample acknowledgments** (vary these, don't repeat):
+- "Okej"
+- "Absolut"
+- "Jag lyssnar"
 
-Om du misshörde ett namn: "Kan du säga ditt namn igen?"
+**Exit to STATE 3 when:** You understand the general topic
 
-STEG 3: Bekräfta och avsluta
-Nu har du informationen. Avsluta samtalet:
+---
 
-1. Bekräfta ärendet kort: "Okej, [sammanfatta ärendet i 5-10 ord]"
-2. Försäkra dem: "Jag ser till att Nils får det här och hör av sig inom kort"
-3. Fråga: "Vill du lägga till något mer?"
-4. Avsluta: "Tack för att du ringde!"
+### STATE 3: COLLECT INFO
 
-Sen avslutar du samtalet.
+**Goal:** Get enough details for Nils to respond
 
-# VIKTIGA REGLER
+**For BUSINESS calls** (company mentioned, professional tone):
+- Get name: "Vem är det jag pratar med?"
+- Get company (if not mentioned): "Vilket företag representerar du?"
+- Get specific details: "Kan du berätta lite mer så Nils förstår sammanhanget?"
 
-- Om du misshör ett namn: "Kan du säga ditt namn igen?"
-- Om personen är otydlig: Fråga OM EN GÅNG på ett annat sätt. Sen gå vidare med vad du har.
-- Ärendet är viktigare än namnet (men samla namn för företagssamtal)
-- Prata ALDRIG längre än 3 meningar per svar
-- Avbryt ALDRIG personen när de pratar
-- Max 1-2 följdfrågor för företagssamtal, ALDRIG för privata samtal
-- När osäker om typ av samtal → Behandla som PRIVAT"""
+**For PRIVATE calls** (only first name, personal matters, casual):
+- Get name if not given: "Vad heter du?"
+- Get basic message
+- DO NOT probe personal details
+- Keep it brief and respectful
+
+**Sample transitions** (vary, don't repeat):
+- "Okej, och..."
+- "Perfekt. Kan du också..."
+- "Bra. Vem är det jag pratar med?"
+
+**Exit to STATE 4 (business) or STATE 5 (private) when:** You have enough info for Nils to respond
+
+---
+
+### STATE 4: CALENDAR CHECK (Business calls only)
+
+**When to enter this state:**
+- Caller asks "What is Nils doing?" "When is he free?" "Can we meet?"
+- OR after collecting info, you judge a meeting would be helpful (new opportunity, partnership discussion, collaboration)
+
+**When NOT to enter:**
+- Private/personal calls
+- Simple status updates ("Did you get my email?")
+- Quick questions
+- Complaint or problem calls
+- Caller just wants callback
+
+**How to offer:**
+Use ONE of these patterns (vary):
+- "Vill du boka en tid med Nils direkt? Jag kan kolla hans kalender."
+- "Jag kan se om Nils har lediga tider nästa vecka om du vill träffas."
+- "Vill du att jag bokar en tid åt er?"
+
+**If they decline:**
+- Say: "Okej, då meddelar jag Nils att ringa dig istället."
+- Skip to STATE 5
+
+**If they accept:**
+1. **BEFORE calling check_availability tool:** Say "Jag kollar kalendern nu..."
+2. Call check_availability(start_datetime, end_datetime)
+   - Use ISO format: "2025-11-01T09:00:00+01:00"
+   - Calculate dates from CURRENT DATE & TIME above
+3. **Wait 10-20 seconds for response** (this is normal, don't comment on wait unless >20s)
+4. Tool returns available slots in Swedish
+5. Present 3-5 slots naturally: "Jag ser [time], [time], och [time]. Vilken tid passar bäst?"
+6. When caller chooses: Call agree_on_meeting(datetime, purpose, attendee_name)
+7. Confirm: "Perfekt! Ni har möte bokat på [time] för att [purpose]."
+
+**Exit to STATE 5 when:** Meeting confirmed OR caller declined calendar check
+
+---
+
+### STATE 5: CONFIRM & CLOSE
+
+**Goal:** Summarize and end cleanly
+
+**Confirmation pattern:**
+1. Brief summary of what you collected
+2. State next steps
+3. Ask if anything to add
+
+**Example (no meeting):**
+"Perfekt [name]. Jag meddelar Nils att han ska ringa dig om [topic]. Han hör av sig så fort som möjligt. Finns det något mer du vill lägga till?"
+
+**Example (with meeting):**
+"Perfekt [name]. Ni har möte bokat på [day] klockan [time] för att diskutera [purpose]. Finns det något mer du vill lägga till?"
+
+**If caller says no / nothing more:**
+- Say: "Tack för att du ringde. Ha en bra dag!"
+- Call end_call() tool AFTER saying goodbye
+
+**NEVER:**
+- End without asking if there's more to add
+- Make promises about when Nils will call back (only "så fort som möjligt")
+- Forget to say goodbye before calling end_call()
+
+---
+
+## TOOLS
+
+You have 4 tools available. Use them as described below.
+
+### Tool: save_caller_info
+**Use when:** You learn caller's name, company, phone, email, or call purpose
+**Parameters:** name, company, phone, email, purpose, urgency
+**Pattern:** Call immediately when you collect info (no preamble needed)
+
+### Tool: check_availability
+**Use when:**
+- Caller asks "What is Nils doing now?" or "When is he free?"
+- Caller wants to schedule a meeting
+- You're in STATE 4 and offering calendar
+
+**BEFORE calling this tool:**
+- Say: "Jag kollar kalendern nu..."
+
+**Parameters:**
+- start_datetime (ISO format with timezone: "2025-11-01T09:00:00+01:00")
+- end_datetime (ISO format with timezone)
+- Calculate dates from CURRENT DATE & TIME section
+
+**After calling:**
+- Tool may take 10-20 seconds (this is normal)
+- DO NOT comment on wait time unless it exceeds 20 seconds
+- Tool returns available slots in Swedish
+- Present the slots to caller: "Jag ser [time], [time], och [time]. Vilken tid passar bäst?"
+
+### Tool: agree_on_meeting
+**Use when:** Caller agrees to a specific time from available slots
+
+**ONLY call AFTER:**
+- You called check_availability
+- You presented available times
+- Caller chose a specific time
+
+**Parameters:**
+- datetime (the exact time caller agreed to)
+- purpose (reason for meeting)
+- attendee_name (caller's name)
+
+**After calling:**
+- Confirm: "Perfekt! Ni har möte bokat på [day] klockan [time]."
+
+### Tool: end_call
+**Use when:** You're ready to end the call
+
+**ALWAYS say goodbye FIRST:**
+"Tack för att du ringde. Ha en bra dag!"
+
+**THEN call this tool** (no preamble)
+
+---
+
+## INSTRUCTIONS & RULES
+
+### Handling Unclear Audio
+- ONLY respond to clear audio or text
+- If input is unintelligible, background noise, silent, or ambiguous:
+  - Say: "Jag hörde inte det. Kan du upprepa?"
+  - Stay in Swedish
+
+### Handling Confusion
+If caller asks "What can you help with?" or "Who are you?":
+- Say: "Jag är Nils AI-assistent. Jag tar emot meddelanden när han inte kan svara. Vill du lämna ett meddelande till honom?"
+
+### Handling Urgency
+If caller uses "brådskande," "akut," "viktigt":
+- Acknowledge: "Jag förstår att det är brådskande. Jag skickar meddelandet till Nils direkt efter samtalet."
+- Set urgency = "high" when calling save_caller_info
+
+### Handling Hesitation
+If caller seems unsure or hesitant:
+- Encourage: "Ta din tid. Vad skulle du vilja att Nils ska veta?"
+
+### Using Caller's Name
+- Once you learn their name, use it naturally: "Perfekt [name]"
+- Don't over-use it (once or twice is enough)
+
+### Memory & Context
+- Remember what caller told you earlier
+- Don't re-ask for information already provided
+- Build on previous statements
+
+---
+
+## REFERENCE PRONUNCIATIONS
+
+- Pronounce "AI" as "A I" (individual letters)
+- Pronounce "Nils" as "Nils" (Swedish pronunciation)
+
+---
+
+## SAFETY & ESCALATION
+
+If ANY of these occur, end the call politely:
+- Caller makes threats or uses harassment
+- Caller becomes abusive or uses repeated profanity
+- Caller explicitly asks for human / to speak with someone else
+- Call exceeds reasonable length (>10 minutes)
+
+**Escalation language:**
+"Jag förstår att du vill prata med någon. Jag avslutar samtalet nu så Nils kan ringa dig direkt."
+
+Then call end_call()
+
+---
+
+## REMEMBER
+
+- Keep responses to 1-2 sentences
+- Vary your language (don't repeat same phrases)
+- Stay in Swedish always
+- Use tool preambles before calendar checks
+- Never contradict yourself
+- Sound natural and human, not robotic
+
+**Every caller should feel:**
+1. They reached the right place
+2. Their message will reach Nils
+3. They know what happens next
+4. The conversation was smooth and natural"""
 
         # Use the base prompt - memory system kept internal for now
         system_prompt = base_prompt
@@ -297,7 +514,7 @@ Sen avslutar du samtalet.
         logger.info("Call safety monitor started")
 
     @function_tool
-    async def save_caller_info(self, name: str = None, phone: str = None, email: str = None, purpose: str = None, urgency: str = "normal"):
+    async def save_caller_info(self, name: str = None, phone: str = None, email: str = None, company: str = None, purpose: str = None, urgency: str = "normal"):
         """Save caller information to memory. Use this immediately when you learn any info about the caller."""
         # Update activity when user provides information
         self.update_activity()
@@ -310,6 +527,9 @@ Sen avslutar du samtalet.
         if email:
             self.call_memory.caller_email = email
             logger.info(f"Saved caller email: {email}")
+        if company:
+            self.call_memory.caller_company = company
+            logger.info(f"Saved caller company: {company}")
         if purpose:
             self.call_memory.call_purpose = purpose
             logger.info(f"Saved call purpose: {purpose}")
@@ -333,6 +553,93 @@ Sen avslutar du samtalet.
         self.call_memory.additional_info.append(details)
         logger.info(f"Added call details: {details}")
         return f"Detaljer tillagda: {details}"
+
+    @function_tool
+    async def check_availability(self, start_datetime: str, end_datetime: str):
+        """
+        Check Nils's calendar for available meeting slots.
+        Use this when you need to schedule a meeting with a business caller.
+
+        Args:
+            start_datetime: Start of time range in ISO format (e.g., "2025-11-01T09:00:00+01:00")
+            end_datetime: End of time range in ISO format (e.g., "2025-11-08T17:00:00+01:00")
+
+        Returns:
+            Available time slots in Swedish format
+        """
+        self.update_activity()
+        logger.info(f"🔍 CALENDAR CHECK STARTED: {start_datetime} to {end_datetime}")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "start_datetime": start_datetime,
+                    "end_datetime": end_datetime
+                }
+
+                logger.info(f"📤 Sending calendar request to webhook...")
+                start_time = time.time()
+
+                async with session.post(
+                    "https://snmnils.app.n8n.cloud/webhook/43b31bbd-3e3d-4510-91a1-512abd9bec19",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30)  # Increased to 30 seconds
+                ) as response:
+                    elapsed = time.time() - start_time
+                    logger.info(f"📥 Calendar response received in {elapsed:.2f}s, status: {response.status}")
+
+                    if response.status == 200:
+                        data = await response.json()
+                        logger.info(f"✅ Calendar data: {data}")
+
+                        # Format available slots for agent
+                        if "available_slots" in data and data["available_slots"]:
+                            slots = data["available_slots"]
+                            formatted_slots = []
+                            for slot in slots[:5]:  # Limit to 5 options
+                                formatted_slots.append(slot.get("friendly_format", slot.get("datetime")))
+
+                            result = "Lediga tider funna: " + ", ".join(formatted_slots) + ". Vilken tid passar bäst?"
+                            logger.info(f"✅ Returning to agent: {result}")
+                            return result
+                        else:
+                            result = "Inga lediga tider hittades i den tidsperioden. Föreslå att Nils ringer tillbaka istället."
+                            logger.info(f"ℹ️ No slots found, returning: {result}")
+                            return result
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ Calendar check failed with status {response.status}: {error_text}")
+                        return "Kunde inte hämta kalendern just nu. Jag föreslår att ni mejlar Nils istället för att boka möte."
+
+        except asyncio.TimeoutError:
+            logger.error("⏱️ Calendar check timed out after 30 seconds")
+            return "Kalenderkontrollen tar för lång tid. Jag föreslår att ni mejlar Nils för att boka möte."
+        except Exception as e:
+            logger.error(f"❌ Error checking calendar: {e}", exc_info=True)
+            return "Kunde inte hämta kalendern just nu. Jag föreslår att ni mejlar Nils istället för att boka möte."
+
+    @function_tool
+    async def agree_on_meeting(self, datetime: str, purpose: str, attendee_name: str):
+        """
+        Record that a meeting time has been agreed upon with the caller.
+        The meeting will be automatically booked after the call ends.
+
+        Args:
+            datetime: Agreed meeting time in ISO format (e.g., "2025-11-01T14:00:00+01:00")
+            purpose: Brief description of meeting purpose (e.g., "Diskutera AI-tjänster")
+            attendee_name: Caller's name
+
+        Returns:
+            Confirmation message to relay to caller
+        """
+        self.update_activity()
+        self.agreed_meeting_time = datetime
+        self.meeting_purpose = purpose
+        self.meeting_attendee = attendee_name
+
+        logger.info(f"Meeting agreed: {datetime} with {attendee_name} - {purpose}")
+
+        return f"Möte bekräftat för {datetime}. Nils kommer ringa på detta nummer vid mötestiden."
 
     async def end_call_gracefully(self):
         """Programmatically end the call with proper cleanup for telephony"""
@@ -422,20 +729,43 @@ async def end_call():
     return "Call ended successfully"
 
 
-async def send_webhook(tracker: ConversationTracker):
+async def send_webhook(tracker: ConversationTracker, agent: 'VoiceAssistant'):
     """Send conversation data to webhook after call completion"""
-    webhook_url = os.getenv("WEBHOOK_URL")
-    if not webhook_url:
-        logger.info("No webhook URL configured, skipping webhook")
-        return
+    # Use the post-call webhook URL for transcript and meeting data
+    webhook_url = "https://snmnils.app.n8n.cloud/webhook/8da0f19c-e602-4e4c-a2ec-24f655e8bf00"
 
+    # Build comprehensive payload with all call data
     payload = {
+        # Call metadata
         "call_id": tracker.call_id,
-        "conversation": tracker.conversation_data,
-        "duration_seconds": tracker.get_duration(),
         "timestamp": int(time.time()),
         "start_time": tracker.start_time,
-        "end_time": time.time()
+        "end_time": time.time(),
+        "duration_seconds": tracker.get_duration(),
+
+        # Full transcript
+        "transcript": tracker.get_full_transcript(),
+
+        # Caller information
+        "caller_name": agent.call_memory.caller_name,
+        "caller_phone": agent.call_memory.caller_phone,
+        "caller_email": agent.call_memory.caller_email,
+        "caller_company": agent.call_memory.caller_company,
+
+        # Call details
+        "call_purpose": agent.call_memory.call_purpose,
+        "call_urgency": agent.call_memory.call_urgency,
+        "call_type": "business" if agent.call_memory.caller_company else "private",
+        "message_summary": " | ".join(agent.call_memory.additional_info) if agent.call_memory.additional_info else None,
+
+        # Meeting data (if meeting was agreed)
+        "meeting_agreed": agent.agreed_meeting_time is not None,
+        "meeting_datetime": agent.agreed_meeting_time,
+        "meeting_purpose": agent.meeting_purpose,
+        "meeting_attendee": agent.meeting_attendee,
+
+        # Raw conversation data for debugging
+        "conversation_raw": tracker.conversation_data
     }
 
     try:
@@ -446,9 +776,11 @@ async def send_webhook(tracker: ConversationTracker):
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
                 if response.status == 200:
-                    logger.info("Webhook sent successfully")
+                    logger.info("Post-call webhook sent successfully")
+                    logger.info(f"Sent transcript ({len(payload['transcript'])} chars), meeting_agreed: {payload['meeting_agreed']}")
                 else:
                     logger.error(f"Webhook failed: {response.status}")
+                    logger.error(f"Response: {await response.text()}")
     except Exception as e:
         logger.error(f"Webhook error: {e}")
 
@@ -479,88 +811,55 @@ async def entrypoint(ctx: JobContext):
     # Get language code for transcription
     language_code = LANGUAGE_CODES.get(language, "en")
 
-    # Map to Deepgram language code (sv-SE for Swedish, en-US for English, etc.)
-    deepgram_language_map = {
-        "sv": "sv-SE",
-        "en": "en-US",
-        "es": "es",
-        "fr": "fr",
-        "de": "de"
-    }
-    deepgram_language = deepgram_language_map.get(language_code, "en-US")
+    # Get transcription prompt for logging (optional - used for debugging only)
+    transcription_prompt = TRANSCRIPTION_HINTS.get(language_code, f"{language} phone conversation with AI voice assistant")
 
-    # CUSTOM STT→LLM→TTS PIPELINE
-    # -------------------------------------------------------
-    # This configuration uses separate components for better control:
+    # ============================================================================
+    # SPEECH-TO-SPEECH PIPELINE (GPT Realtime)
+    # ============================================================================
     #
     # AUDIO FLOW:
-    #   1. User audio (8kHz SIP) → LiveKit → [Auto-resample to 16kHz]
-    #   2. Deepgram Nova-3 STT → Transcribes to TEXT (Swedish-optimized)
-    #   3. GPT-4o-mini LLM → Processes TEXT and generates response
-    #   4. OpenAI TTS → Converts TEXT to AUDIO
-    #   5. LiveKit → [Auto-resample] → SIP (8kHz)
+    #   User audio (8kHz SIP) → LiveKit → GPT Realtime Model → LiveKit → SIP (8kHz)
     #
     # BENEFITS:
-    #   - Better Swedish transcription (Deepgram Nova-3)
-    #   - Full text-based reasoning (GPT-4o-mini)
-    #   - Flexible TTS (can switch voices easily)
-    #   - LiveKit handles all audio resampling automatically
-    #   - ~700-850ms total latency (Deepgram 150ms + LLM 400ms + TTS 300ms)
+    #   - Native speech-to-speech (no text intermediary for audio)
+    #   - ~300-500ms total latency (vs ~1000-1200ms with modular pipeline)
+    #   - Better prosody and natural conversation flow
+    #   - Handles VAD, STT, LLM, TTS internally in one model
+    #   - Marin voice available (Swedish-optimized)
+    #   - Better interruption handling (barge-in)
+    #
+    # FEATURES:
+    #   - InputAudioTranscription: Logs transcripts for debugging/analytics ONLY
+    #   - Modalities: ["audio", "text"] - audio for speech, text for function tools
+    #   - Temperature: 0.9 - natural, conversational responses
+    #   - Voice: Marin (Swedish) or Cedar (English)
+    #
+    # COST:
+    #   - ~$0.06/minute ($0.24 input + $0.32 output per minute)
+    #   - 2-3x more than modular pipeline, but 60% faster latency
+    #
+    # ============================================================================
 
-    logger.info(f"🎯 Telephony-Optimized STT→LLM→TTS Pipeline")
-    logger.info(f"   STT: Deepgram Nova-3 ({deepgram_language}) - High-quality transcription")
-    logger.info(f"        interim_results=True, no endpointing (using external VAD)")
-    logger.info(f"   LLM: GPT-4o-mini (temp={model_config.get('temperature', 0.9)}) - Text reasoning")
-    logger.info(f"   TTS: gpt-4o-mini-tts (voice: nova, detailed Swedish instructions)")
-    logger.info(f"        Pre-resampled to 8kHz for SIP, buffered for natural prosody")
-    logger.info(f"   VAD: LiveKit Silero VAD - Optimized for turn-taking and barge-in")
-    logger.info(f"        min_speech=200ms, min_silence=600ms, threshold=0.5")
-    logger.info(f"   Flow: SIP(8kHz) → Silero VAD → Deepgram(16kHz) → GPT-4o-mini → TTS(24kHz→8kHz) → SIP(8kHz)")
-    logger.info(f"   Optimization: Silero VAD + buffered TTS + 8kHz pre-resampling")
-    logger.info(f"   Cost: ~$0.025-$0.045/call")
+    logger.info(f"🎯 Speech-to-Speech Pipeline (GPT Realtime)")
+    logger.info(f"   Model: {model_config.get('primary_model', 'gpt-4o-realtime-preview')}")
+    logger.info(f"   Voice: {voice_name} (Swedish-optimized)")
+    logger.info(f"   Language: {language} ({language_code})")
+    logger.info(f"   Temperature: {model_config.get('temperature', 0.9)}")
+    logger.info(f"   Latency: ~300-500ms end-to-end (native speech-to-speech)")
+    logger.info(f"   Modalities: audio + text (function tools enabled)")
+    logger.info(f"   Flow: SIP(8kHz) → GPT Realtime (internal VAD/STT/LLM/TTS) → SIP(8kHz)")
+    logger.info(f"   Cost: ~$0.06/minute")
 
     session = AgentSession(
-        # Turn detection via LiveKit Silero VAD (better than STT endpointing for calls)
-        # Handles echo cancellation, barge-in, and turn-taking reliably
-        vad=silero.VAD.load(
-            min_speech_duration=0.2,        # 200ms minimum speech to start detection
-            min_silence_duration=0.6,       # 600ms silence to end turn (handles pauses)
-            prefix_padding_duration=0.4,    # 400ms padding before speech (catch speech start)
-            activation_threshold=0.5,       # Balanced sensitivity for phone audio
-            max_buffered_speech=60.0,       # Allow up to 60s responses
-        ),
-        turn_detection="vad",               # Use VAD for turn detection (not STT endpointing)
-
-        # Speech-to-Text - Deepgram Nova-3 without endpointing (VAD handles turn detection)
-        # Optimized for quiet speech detection
-        stt=deepgram.STT(
-            model="nova-3",
-            language=deepgram_language,
-            smart_format=True,                # Automatic punctuation and formatting
-            interim_results=True,             # Enable interim results for better responsiveness
-            punctuate=True,                   # Important for LLM context
-            profanity_filter=False,           # Keep original speech
-            # NOTE: No endpointing_ms - VAD handles turn detection
-        ),
-
-        # Large Language Model
-        llm=openai.LLM(
-            model=model_config.get("primary_model", "gpt-4o-mini"),
-            temperature=model_config.get("temperature", 0.9),
-        ),
-
-        # Text-to-Speech - gpt-4o-mini-tts with instructable voice control
-        # Model: gpt-4o-mini-tts (March 2025) - supports voice style prompting
-        # Voice: Marin/Cedar/Alloy with instructions for tone, emotion, pacing
-        # Speed: 1.0 (natural playback - use instructions for pacing, not speed parameter)
-        # Pre-resampling: Eliminates glitching by avoiding real-time resampling on LiveKit SFU
-        tts=create_telephony_tts(
-            voice="nova",                   # nova: friendly, clear, most popular (valid for gpt-4o-mini-tts)
-            model="gpt-4o-mini-tts",        # Latest model with voice instructions support
-            speed=1.0,                      # Natural playback speed (not chipmunk-y)
-            instructions="Voice: Warm, empathetic, and professional, reassuring the customer that their issue is understood and will be resolved.\n\nPunctuation: Well-structured with natural pauses, allowing for clarity and a steady, calming flow.\n\nDelivery: Calm and patient, with a supportive and understanding tone that reassures the listener.\n\nIMPORTANT SPEAK SWEDISH\n\nPhrasing: Clear and concise, using customer-friendly language that avoids jargon while maintaining professionalism.\n\nTone: Empathetic and solution-focused, emphasizing both understanding and proactive assistance.",
-            buffer_complete_sentence=True   # Buffer complete TTS synthesis for natural prosody
-        ),
+        llm=openai.realtime.RealtimeModel(
+            model=model_config.get("primary_model", "gpt-4o-realtime-preview"),
+            voice=voice_name,  # "marin" for Swedish, "cedar" for English
+            modalities=["audio", "text"],  # Audio for speech, text for function tools
+            temperature=model_config.get("temperature", 0.9)
+            # Note: GPT Realtime already transcribes audio internally as part of speech-to-speech
+            # InputAudioTranscription (Whisper-1) would add extra cost with no benefit
+        )
     )
 
     logger.info("Session created successfully")
@@ -625,13 +924,6 @@ async def entrypoint(ctx: JobContext):
                 logger.info("Safety monitor stopped due to participant disconnect")
             # The session will close automatically, no need to manually end call
 
-    # Register webhook as shutdown callback
-    async def send_completion_webhook():
-        logger.info("Sending completion webhook...")
-        await send_webhook(tracker)
-
-    ctx.add_shutdown_callback(send_completion_webhook)
-
     # Extract caller phone number from room participants
     caller_phone = None
     for identity, participant in ctx.room.remote_participants.items():
@@ -651,6 +943,13 @@ async def entrypoint(ctx: JobContext):
 
     # Store agent reference in session for event handlers
     session._agent_ref = agent
+
+    # Register webhook as shutdown callback (after agent is created)
+    async def send_completion_webhook():
+        logger.info("Sending completion webhook...")
+        await send_webhook(tracker, agent)
+
+    ctx.add_shutdown_callback(send_completion_webhook)
 
     logger.info("Starting agent session")
 
