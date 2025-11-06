@@ -2,98 +2,14 @@ WARNING: config file C:\Users\Admin/.livekit/cli-config.yaml should have permiss
 WARNING: config file C:\Users\Admin/.livekit/cli-config.yaml should have permissions 600
 Using project [samuels-agent]
 Using agent [CA_QYLXQNBkzr2c]
-{"message": "starting worker", "level": "INFO", "name": "livekit.agents", "version": "1.2.17", "rtc-version": "1.0.17", "timestamp": "2025-10-31T13:17:30.644075+00:00"}
-{"message": "preloading plugins", "level": "INFO", "name": "livekit.agents", "packages": ["livekit.plugins.openai", "av"], "timestamp": "2025-10-31T13:17:30.644196+00:00"}
-{"message": "initializing process", "level": "INFO", "name": "livekit.agents", "pid": 69, "timestamp": "2025-10-31T13:17:31.932271+00:00"}
-{"message": "initializing process", "level": "INFO", "name": "livekit.agents", "pid": 72, "timestamp": "2025-10-31T13:17:31.947517+00:00"}
-{"message": "initializing process", "level": "INFO", "name": "livekit.agents", "pid": 78, "timestamp": "2025-10-31T13:17:31.961365+00:00"}
-{"message": "initializing process", "level": "INFO", "name": "livekit.agents", "pid": 84, "timestamp": "2025-10-31T13:17:31.972842+00:00"}
-{"message": "process initialized", "level": "INFO", "name": "livekit.agents", "pid": 69, "elapsed_time": 0.07, "timestamp": "2025-10-31T13:17:32.003867+00:00"}
-{"message": "process initialized", "level": "INFO", "name": "livekit.agents", "pid": 72, "elapsed_time": 0.06, "timestamp": "2025-10-31T13:17:32.010881+00:00"}
-{"message": "process initialized", "level": "INFO", "name": "livekit.agents", "pid": 78, "elapsed_time": 0.06, "timestamp": "2025-10-31T13:17:32.019531+00:00"}
-{"message": "process initialized", "level": "INFO", "name": "livekit.agents", "pid": 84, "elapsed_time": 0.06, "timestamp": "2025-10-31T13:17:32.034931+00:00"}
-{"message": "registered worker", "level": "INFO", "name": "livekit.agents", "id": "CAW_ZqVPMdVkYqj5", "url": "https://samuels-agent-qyhykxsz.livekit.cloud", "region": "US East B", "protocol": 16, "timestamp": "2025-10-31T13:17:32.174934+00:00"}
-{"message": "received job request", "level": "INFO", "name": "livekit.agents", "job_id": "AJ_EWb9CNkSPywk", "dispatch_id": "", "room_name": "nils-call-_0723161614_uhhHuDeSsqrF", "agent_name": "", "resuming": false, "timestamp": "2025-10-31T13:24:09.469367+00:00"}
-{"message": "initializing process", "level": "INFO", "name": "livekit.agents", "pid": 146, "timestamp": "2025-10-31T13:24:09.564777+00:00"}
-{"message": "process initialized", "level": "INFO", "name": "livekit.agents", "pid": 146, "elapsed_time": 0.05, "timestamp": "2025-10-31T13:24:09.615805+00:00"}
-{"message": "Loaded agent configuration from /app/config/agent.creation.md", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682614+00:00"}
-{"message": "Starting voice agent for room: nils-call-_0723161614_uhhHuDeSsqrF", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682716+00:00"}
-{"message": "Using voice: marin, language: Svenska", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682747+00:00"}
-{"message": "Creating session with voice: marin, model: gpt-4o-realtime-preview", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682769+00:00"}
-{"message": "🎯 Speech-to-Speech Pipeline (GPT Realtime)", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682789+00:00"}
-{"message": "   Model: gpt-4o-realtime-preview", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682807+00:00"}
-{"message": "   Voice: marin (Swedish-optimized)", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682847+00:00"}
-{"message": "   Language: Svenska (sv)", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682866+00:00"}
-{"message": "   Temperature: 0.9", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682888+00:00"}
-{"message": "   Latency: ~300-500ms end-to-end (native speech-to-speech)", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682904+00:00"}
-{"message": "   Modalities: audio + text (function tools enabled)", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682921+00:00"}
-{"message": "   Flow: SIP(8kHz) → GPT Realtime (internal VAD/STT/LLM/TTS) → SIP(8kHz)", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682937+00:00"}
-{"message": "   Cost: ~$0.06/minute", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.682953+00:00"}
-{"message": "Session created successfully", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.683916+00:00"}
-{"message": "Starting agent session", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.684215+00:00"}
-{"message": "Call safety monitor started", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.684266+00:00"}
-{"message": "Agent session started, sending greeting immediately", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.713754+00:00"}
-{"message": "Participant connected: sip_0723161614, kind: 3", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:09.742320+00:00"}
-{"message": "Conversation item from assistant: Hej,...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:10.943988+00:00"}
-{"message": "Greeting triggered successfully", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:10.944961+00:00"}
-{"message": "Final user transcript: Och det hade jag tänkt på, typ en jävla handling man skulle kunna uttala sig om.", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:17.011685+00:00"}
-{"message": "⏱️  STT Complete at: 1761917057.0117748", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:17.011785+00:00"}
-{"message": "Conversation item from user: Och det hade jag tänkt på, typ en jävla handling m...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:17.011883+00:00"}
-{"message": "Final user transcript: Tjena!", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:19.997185+00:00"}
-{"message": "⏱️  STT Complete at: 1761917059.9972692", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:19.997279+00:00"}
-{"message": "Conversation item from user: Tjena!...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:19.997375+00:00"}
-{"message": "Final user transcript: ", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:22.535770+00:00"}
-{"message": "⏱️  STT Complete at: 1761917062.535855", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:22.535864+00:00"}
-{"message": "Conversation item from user: ...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:22.535964+00:00"}
-{"message": "Conversation item from assistant: Hej! Nils kan inte svara just nu, men jag tar gärn...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:28.305193+00:00"}
-{"message": "⏱️  LATENCY: 5769ms from user speech to agent response", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:28.305288+00:00"}
-{"message": "Final user transcript: Ja, det var en bra fråga.", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:36.513144+00:00"}
-{"message": "⏱️  STT Complete at: 1761917076.5132232", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:36.513232+00:00"}
-{"message": "Conversation item from user: Ja, det var en bra fråga....", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:36.513326+00:00"}
-{"message": "Final user transcript: Nu.", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:38.565711+00:00"}
-{"message": "⏱️  STT Complete at: 1761917078.5657983", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:38.565808+00:00"}
-{"message": "Conversation item from user: Nu....", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:38.565910+00:00"}
-{"message": "Conversation item from assistant: Ingen fara, ta din tid. Vad skulle du vilja att Ni...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:41.467798+00:00"}
-{"message": "⏱️  LATENCY: 2902ms from user speech to agent response", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:41.467892+00:00"}
-{"message": "Conversation item from assistant: Förstår. Vill du...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:52.361379+00:00"}
-{"message": "Final user transcript: Jag ringde för att jag har haft lite problem med vår automation här.", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:54.609333+00:00"}
-{"message": "⏱️  STT Complete at: 1761917094.609452", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:54.609463+00:00"}
-{"message": "Conversation item from user: Jag ringde för att jag har haft lite problem med v...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:54.609573+00:00"}
-{"message": "Final user transcript: Har vi hjälp?", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:56.110281+00:00"}
-{"message": "⏱️  STT Complete at: 1761917096.1103654", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:56.110377+00:00"}
-{"message": "Conversation item from user: Har vi hjälp?...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:24:56.110490+00:00"}
-{"message": "Conversation item from assistant: Jag förstår, handlar det om något specifikt proble...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:01.512544+00:00"}
-{"message": "⏱️  LATENCY: 5402ms from user speech to agent response", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:01.512646+00:00"}
-{"message": "Final user transcript: Den har inte skickats ut på två dagar nu, en av mina senaste kunder. Den har inte fått någonting och jag tror uppföljning, det funkar inte heller.", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:16.515757+00:00"}
-{"message": "⏱️  STT Complete at: 1761917116.5158439", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:16.515853+00:00"}
-{"message": "Conversation item from user: Den har inte skickats ut på två dagar nu, en av mi...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:16.515944+00:00"}
-{"message": "Final user transcript: Jag vet inte vad som händer.", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:17.408804+00:00"}
-{"message": "⏱️  STT Complete at: 1761917117.408891", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:17.408899+00:00"}
-{"message": "Conversation item from user: Jag vet inte vad som händer....", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:17.408986+00:00"}
-{"message": "Final user transcript: Måste jag ha hjälp nu?", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:21.052569+00:00"}
-{"message": "⏱️  STT Complete at: 1761917121.0526597", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:21.052669+00:00"}
-{"message": "Conversation item from user: Måste jag ha hjälp nu?...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:21.052762+00:00"}
-{"message": "Conversation item from assistant: Okej, jag förstår. Det låter som att det är något ...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:33.208532+00:00"}
-{"message": "⏱️  LATENCY: 12156ms from user speech to agent response", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:33.208628+00:00"}
-{"message": "Final user transcript: Jag hörde att du pratade med Nils, på företag och användare.", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:52.745146+00:00"}
-{"message": "⏱️  STT Complete at: 1761917152.7452323", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:52.745242+00:00"}
-{"message": "Conversation item from user: Jag hörde att du pratade med Nils, på företag och ...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:25:52.745328+00:00"}
-{"message": "Conversation item from assistant: Okej, tack. Jag ser till att föra det här vidare t...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:01.141965+00:00"}
-{"message": "⏱️  LATENCY: 8397ms from user speech to agent response", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:01.142061+00:00"}
-{"message": "Final user transcript: Jag vill att han ringer nu direkt. Vad är det han håller på med?", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:07.326833+00:00"}
-{"message": "⏱️  STT Complete at: 1761917167.3269186", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:07.326929+00:00"}
-{"message": "Conversation item from user: Jag vill att han ringer nu direkt. Vad är det han ...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:07.327024+00:00"}
-{"message": "Conversation item from assistant: Jag kan tyvärr inte se exakt vad han gör just nu, ...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:16.118433+00:00"}
-{"message": "⏱️  LATENCY: 8791ms from user speech to agent response", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:16.118531+00:00"}
-{"message": "Final user transcript: Jo, jag vill att du kollar vad han gör. Nu!", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:22.647985+00:00"}
-{"message": "⏱️  STT Complete at: 1761917182.6480715", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:22.648081+00:00"}
-{"message": "Conversation item from user: Jo, jag vill att du kollar vad han gör. Nu!...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:22.648176+00:00"}
-{"message": "Function tool called to end call", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:25.210548+00:00"}
-{"message": "Deleting room to end SIP call: nils-call-_0723161614_uhhHuDeSsqrF", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:28.212020+00:00"}
-{"message": "process exiting", "level": "INFO", "name": "livekit.agents", "reason": "", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:28.270004+00:00"}
-{"message": "Sending completion webhook...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:28.274524+00:00"}
-{"message": "Conversation item from assistant: Jag har tyvärr inte möjlighet att kolla vad han gö...", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:28.275855+00:00"}
-{"message": "⏱️  LATENCY: 5628ms from user speech to agent response", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:28.275912+00:00"}
-{"message": "Room deleted - SIP call terminated", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:28.316653+00:00"}
-{"message": "Post-call webhook sent successfully", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:28.717899+00:00"}
-{"message": "Sent transcript (1511 chars), meeting_agreed: False", "level": "INFO", "name": "voice-agent", "pid": 69, "job_id": "AJ_EWb9CNkSPywk", "timestamp": "2025-10-31T13:26:28.717972+00:00"}
+{"message": "starting worker", "level": "INFO", "name": "livekit.agents", "version": "1.2.18", "rtc-version": "1.0.18", "timestamp": "2025-11-06T08:52:49.810669+00:00"}
+{"message": "preloading plugins", "level": "INFO", "name": "livekit.agents", "packages": ["livekit.plugins.openai", "av"], "timestamp": "2025-11-06T08:52:49.810768+00:00"}
+{"message": "initializing process", "level": "INFO", "name": "livekit.agents", "pid": 69, "timestamp": "2025-11-06T08:52:50.940482+00:00"}
+{"message": "initializing process", "level": "INFO", "name": "livekit.agents", "pid": 72, "timestamp": "2025-11-06T08:52:50.956801+00:00"}
+{"message": "initializing process", "level": "INFO", "name": "livekit.agents", "pid": 78, "timestamp": "2025-11-06T08:52:50.966591+00:00"}
+{"message": "initializing process", "level": "INFO", "name": "livekit.agents", "pid": 84, "timestamp": "2025-11-06T08:52:50.978648+00:00"}
+{"message": "process initialized", "level": "INFO", "name": "livekit.agents", "pid": 69, "elapsed_time": 0.06, "timestamp": "2025-11-06T08:52:51.004218+00:00"}
+{"message": "process initialized", "level": "INFO", "name": "livekit.agents", "pid": 72, "elapsed_time": 0.06, "timestamp": "2025-11-06T08:52:51.013121+00:00"}
+{"message": "process initialized", "level": "INFO", "name": "livekit.agents", "pid": 78, "elapsed_time": 0.06, "timestamp": "2025-11-06T08:52:51.023299+00:00"}
+{"message": "process initialized", "level": "INFO", "name": "livekit.agents", "pid": 84, "elapsed_time": 0.05, "timestamp": "2025-11-06T08:52:51.025471+00:00"}
+{"message": "registered worker", "level": "INFO", "name": "livekit.agents", "id": "CAW_iscknXAMhiFm", "url": "https://samuels-agent-qyhykxsz.livekit.cloud", "region": "US East B", "protocol": 16, "timestamp": "2025-11-06T08:52:51.088428+00:00"}

@@ -2,7 +2,7 @@ language: "Svenska"
 voice: "marin"
 
 first_message: >
-  Hej, du pratar med Nils AI-assistent. Han kunde faktiskt inte svara just nu, men jag kommer att meddela honom efter samtalet så han kontaktar dig så snart som möjligt. Varför ringde du idag?
+  Hejsan, jag är Nils AI-assistent. Jag bokar möten, bestämmer tider och meddelar honom efter varje samtal. Varför ringde du idag?
 
 advanced:
   model_overrides:

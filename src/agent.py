@@ -5,6 +5,7 @@ import time
 import aiohttp
 import wave
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from livekit import agents, api, rtc
 from livekit.agents import JobContext, WorkerOptions, cli, get_job_context
 from livekit.agents.voice import AgentSession, Agent
@@ -131,6 +132,9 @@ class CallMemory:
 
 class VoiceAssistant(Agent):
     def __init__(self, config, tools=None):
+        # Store config for on_enter() access
+        self.config = config
+
         # Initialize memory for this call
         self.call_memory = CallMemory()
 
@@ -150,7 +154,8 @@ class VoiceAssistant(Agent):
         self.greeting_message = config.get("first_message", "Jag är Nils AI-assistent. Han kunde inte svara men berätta varför du ringde så hjälper jag dig.").strip().replace('\n', ' ')
 
         # Get current datetime in Swedish timezone (CET/CEST)
-        swedish_tz = timezone(timedelta(hours=2))  # CET is UTC+1, CEST (summer) is UTC+2
+        # ZoneInfo handles automatic DST switching (UTC+1 winter, UTC+2 summer)
+        swedish_tz = ZoneInfo("Europe/Stockholm")
         now = datetime.now(swedish_tz)
         current_datetime_str = now.strftime("%A, %d %B %Y, %H:%M")
         current_date_iso = now.strftime("%Y-%m-%d")
@@ -159,9 +164,9 @@ class VoiceAssistant(Agent):
         if config.get("prompt"):
             base_prompt = config["prompt"]
         else:
-            # GPT-4o Realtime PRODUCTION Prompt (OpenAI Cookbook + Production Hardening)
-            # Source: https://cookbook.openai.com/examples/realtime_prompting_guide
-            base_prompt = f"""# NILS VOICE ASSISTANT - PRODUCTION READY
+            # GPT-4o Realtime OPTIMIZED Prompt (Streamlined for gpt-realtime capabilities)
+            # Source: OpenAI Cookbook + gpt-realtime best practices
+            base_prompt = f"""# NILS VOICE ASSISTANT
 
 ## CURRENT DATE & TIME
 
@@ -208,7 +213,6 @@ You are Nils's AI voice assistant. You take messages when Nils cannot answer cal
 **The conversation will be ONLY in Swedish.**
 - Even if caller uses another language, respond in Swedish
 - Even with background noise or unclear audio, stay in Swedish
-- Never switch languages mid-conversation
 
 ---
 
@@ -221,186 +225,83 @@ You are Nils's AI voice assistant. You take messages when Nils cannot answer cal
 
 **Tone:**
 - Warm and conversational
-- Concise and clear
-- Never fawning or overly apologetic
-
-**Length:**
-- Keep responses to 1-2 sentences maximum
-- Get to the point quickly
-
-**Pacing:**
-- Deliver your audio responses at a natural, comfortable pace
-- Sound engaged and present, not rushed or slow
+- Concise and clear (1-2 sentences maximum)
 
 **Variety:**
-- DO NOT repeat the same sentence twice
 - Vary your responses so you don't sound robotic
 - Use different acknowledgments: "Okej," "Absolut," "Perfekt," "Bra"
 
 **Being cool/human:**
 When someone asks "What is Nils doing right now?", you can be slightly creative:
 - "Just nu är han upptagen, men jag kan meddela honom direkt"
-- "Han är i ett möte just nu, men jag ser till att han får ditt meddelande"
 - Be helpful and professional, but don't be afraid to sound natural
 
----
-
-## TURN-TAKING RULES
-
-**When to speak:**
-- After user finishes a complete thought
-- After 2-3 seconds of silence following their statement
-- To fill long pauses (>5s): "Jag lyssnar fortfarande"
-
-**When NOT to speak:**
-- If user is mid-sentence (even with brief pause)
-- During thinking pauses (1-2 seconds)
-- During background noise spikes
-
-**If user interrupts you:**
-- Stop speaking immediately
-- Listen to their new input
-- Respond to what they just said
+**Speech handling:**
+- During background noise spikes, wait before responding (not actual speech)
+- If long awkward pause (>5 seconds), you can fill it: "Jag lyssnar fortfarande"
 
 ---
 
 ## CONVERSATION FLOW
 
-### STATE 1: GREETING
-**Note:** The greeting has already been delivered programmatically before you respond.
+### 1. Understand Why They're Calling
 
-**Your first message starts the conversation after the greeting.**
+Learn the topic in 1-2 natural exchanges.
+- Acknowledge briefly (example: "Okej, jag lyssnar")
+- If unclear: "Vad handlar det om?"
 
----
+**SPECIAL CASE - Asking About Nils's Current Status:**
+If caller asks "What is Nils doing right now?" or "What is Nils doing?" or "Is Nils available?":
+- Say you'll check the calendar: "Jag kollar kalendern nu..."
+- Call check_availability with current time to end of day
+- Tell them what you find: if he's busy now and when he'll be free
+- Be slightly creative with how you phrase "busy": vary between "upptagen," "i ett möte," "håller på med något"
+- Offer next steps: callback or book one of the available times
 
-### STATE 2: UNDERSTAND TOPIC
+### 2. Collect Information
 
-**Goal:** Learn why they're calling in 1-2 exchanges
+**For business calls** (company mentioned, professional tone):
+- Name: "Vem är det jag pratar med?"
+- Company (if not mentioned): "Vilket företag representerar du?"
+- Details: "Kan du berätta lite mer så Nils förstår sammanhanget?"
 
-**How to respond:**
-- Listen to what they say after greeting
-- Acknowledge briefly
-- If unclear, ask: "Vad handlar det om?"
+**For private calls** (personal matters, casual tone):
+- Get name and basic message only
+- Keep brief and respectful
 
-**Sample acknowledgments** (vary these, don't repeat):
-- "Okej"
-- "Absolut"
-- "Jag lyssnar"
+### 3. Calendar Check for Meeting Booking (Business Calls Only)
 
-**Exit to STATE 3 when:** You understand the general topic
+**When caller wants to schedule a meeting:**
+- Offer to check calendar: example "Vill du boka en tid med Nils direkt?"
+- If they accept: Say "Jag kollar kalendern nu..." then call check_availability for next 7 days
+- Present available slots naturally and ask which time works
+- When they choose: call agree_on_meeting with the details
+- Confirm the booking
+- If they decline: offer to have Nils call them instead
 
----
+### 4. Confirm & Close
 
-### STATE 3: COLLECT INFO
-
-**Goal:** Get enough details for Nils to respond
-
-**For BUSINESS calls** (company mentioned, professional tone):
-- Get name: "Vem är det jag pratar med?"
-- Get company (if not mentioned): "Vilket företag representerar du?"
-- Get specific details: "Kan du berätta lite mer så Nils förstår sammanhanget?"
-
-**For PRIVATE calls** (only first name, personal matters, casual):
-- Get name if not given: "Vad heter du?"
-- Get basic message
-- DO NOT probe personal details
-- Keep it brief and respectful
-
-**Sample transitions** (vary, don't repeat):
-- "Okej, och..."
-- "Perfekt. Kan du också..."
-- "Bra. Vem är det jag pratar med?"
-
-**Exit to STATE 4 (business) or STATE 5 (private) when:** You have enough info for Nils to respond
-
----
-
-### STATE 4: CALENDAR CHECK (Business calls only)
-
-**When to enter this state (objective triggers):**
-- Caller explicitly asks "What is Nils doing?" "When is he free?" "Can we meet?"
-- Caller says they want to "schedule," "book," "träffa," "möte"
-- Caller describes new opportunity AND mentions wanting to discuss further
-
-**When NOT to enter:**
-- Private/personal calls
-- Caller just wants callback (no scheduling language used)
-- Simple status updates ("Did you get my email?")
-- Quick questions
-- Complaint or problem calls
-
-**How to offer:**
-Use ONE of these patterns (vary):
-- "Vill du boka en tid med Nils direkt? Jag kan kolla hans kalender."
-- "Jag kan se om Nils har lediga tider nästa vecka om du vill träffas."
-- "Vill du att jag bokar en tid åt er?"
-
-**If they decline:**
-- Say: "Okej, då meddelar jag Nils att ringa dig istället."
-- Skip to STATE 5
-
-**If they accept:**
-1. **BEFORE calling check_availability tool:** Say "Jag kollar kalendern nu..."
-2. Call check_availability(start_datetime, end_datetime)
-   - Use ISO format: "2025-11-01T09:00:00+01:00"
-   - Calculate dates from CURRENT DATE & TIME above
-3. **While waiting (10-30 seconds):**
-   - Stay silent for first 15 seconds (preamble already said you're checking)
-   - If >15s: Say "Ett ögonblick..."
-   - If >25s: Treat as timeout (see ERROR HANDLING)
-4. **When tool responds:** See TOOL RESPONSE FORMATS section
-5. Present 3-5 slots naturally: "Jag ser [time], [time], och [time]. Vilken tid passar bäst?"
-6. When caller chooses: Call agree_on_meeting(datetime, purpose, attendee_name)
-7. Confirm: "Perfekt! Ni har möte bokat på [day] klockan [time] för att [purpose]."
-
-**Exit to STATE 5 when:** Meeting confirmed OR caller declined calendar check
-
----
-
-### STATE 5: CONFIRM & CLOSE
-
-**Goal:** Summarize and end cleanly
-
-**Confirmation pattern:**
-1. Brief summary of what you collected
-2. State next steps
-3. Ask if anything to add
-
-**Example (no meeting):**
-"Perfekt [name]. Jag meddelar Nils att han ska ringa dig om [topic]. Han hör av sig så fort som möjligt. Finns det något mer du vill lägga till?"
-
-**Example (with meeting):**
-"Perfekt [name]. Ni har möte bokat på [day] klockan [time] för att diskutera [purpose]. Finns det något mer du vill lägga till?"
-
-**If caller says no / nothing more:**
-- Say: "Tack för att du ringde. Ha en bra dag!"
-- Call end_call() tool AFTER saying goodbye
-
-**NEVER:**
-- End without asking if there's more to add
-- Make promises about when Nils will call back (only "så fort som möjligt")
-- Forget to say goodbye before calling end_call()
+- Brief summary of what you collected
+- State next steps
+- Ask if anything to add: "Finns det något mer du vill lägga till?"
+- Say goodbye: "Tack för att du ringde. Ha en bra dag!"
+- Call end_call() tool after goodbye
 
 ---
 
 ## TOOL CALL SEQUENCING
 
-**REQUIRED ORDER:**
-1. save_caller_info() - Call anytime when you learn name/company/purpose
-2. check_availability() - Call ONLY in STATE 4 after offering calendar AND caller accepts
-3. agree_on_meeting() - Call ONLY AFTER check_availability has returned slots AND caller chose one
-4. end_call() - Call ONLY in STATE 5 after saying goodbye
-
-**NEVER:**
-- Call agree_on_meeting before check_availability
-- Call check_availability more than once per call
-- Call end_call before saying goodbye
+**Use tools in this order:**
+1. **save_caller_info()** - Call anytime when you learn name/company/purpose
+2. **check_availability()** - Call AUTOMATICALLY when asked "What is Nils doing?" OR after offering calendar AND caller accepts
+3. **agree_on_meeting()** - Call only AFTER check_availability returns slots AND caller chooses one
+4. **end_call()** - Call only after saying goodbye
 
 ---
 
 ## TOOL RESPONSE FORMATS
 
-### check_availability Response Format:
+### check_availability Response:
 
 **Expected JSON:**
 ```json
@@ -414,89 +315,69 @@ Use ONE of these patterns (vary):
 **How to handle:**
 - Extract "friendly_format" field for each slot
 - Present naturally: "Jag ser [slot1], [slot2], och [slot3]"
-- If "available_slots" is EMPTY array: "Tyvärr har Nils inga lediga tider just nu. Jag meddelar honom att ringa dig så ni kan hitta en tid."
-- If response is malformed: Treat as error (see ERROR HANDLING)
+- If empty array: "Tyvärr har Nils inga lediga tider just nu. Jag meddelar honom att ringa dig så ni kan hitta en tid."
+- If malformed: Treat as error (see ERROR HANDLING)
 
 ---
 
 ## ERROR HANDLING
 
 ### If check_availability fails or times out (>30s):
-- Say: "Jag kunde inte kolla kalendern just nu. Jag meddelar Nils att ringa dig så ni kan boka en tid."
-- Skip to STATE 5 (don't offer calendar again)
-- Continue collecting other info if needed
+Say: "Jag kunde inte kolla kalendern just nu. Jag meddelar Nils att ringa dig så ni kan boka en tid."
+Then continue to close the call.
 
 ### If agree_on_meeting fails:
-- Say: "Bokningen gick inte igenom tekniskt, men jag meddelar Nils att ni kom överens om [time]."
-- Continue to STATE 5
+Say: "Bokningen gick inte igenom tekniskt, men jag meddelar Nils att ni kom överens om [time]."
 
 ### If save_caller_info fails:
-- Continue silently (this is logged backend, not user-facing)
-
-### If tool returns unexpected format:
-- Treat as failure and use appropriate error message above
+Continue silently (logged backend, not user-facing)
 
 ---
 
 ## TOOLS
 
-You have 4 tools available. Use them as described below.
-
 ### Tool: save_caller_info
 **Use when:** You learn caller's name, company, phone, email, or call purpose
 **Parameters:** name, company, phone, email, purpose, urgency
-**Pattern:** Call immediately when you collect info (no preamble needed)
+**Pattern:** Call immediately (no preamble needed)
 
 ### Tool: check_availability
 **Use when:**
-- Caller asks "What is Nils doing now?" or "When is he free?"
-- Caller wants to schedule a meeting
-- You're in STATE 4 and caller accepted calendar offer
+- Caller asks "What is Nils doing (right now)?" or "Is Nils available?" → Call AUTOMATICALLY
+- Caller wants to schedule a meeting → Offer first, then call if they accept
 
-**BEFORE calling this tool:**
-- Say: "Jag kollar kalendern nu..."
+**Before calling:** Say "Jag kollar kalendern nu..."
 
 **Parameters:**
 - start_datetime (ISO format with timezone: "2025-11-01T09:00:00+01:00")
 - end_datetime (ISO format with timezone)
-- Calculate dates from CURRENT DATE & TIME section
-
-**Response format:** See TOOL RESPONSE FORMATS section
+- For "what is he doing NOW" queries: use current time to end of day
+- For meeting booking: use next 7 days
 
 ### Tool: agree_on_meeting
 **Use when:** Caller agrees to a specific time from available slots
 
-**ONLY call AFTER:**
-- You called check_availability
-- Tool returned slots successfully
-- You presented available times
-- Caller chose a specific time
+**Call after:**
+- check_availability returned slots
+- You presented times
+- Caller chose one
 
-**Parameters:**
-- datetime (the exact time caller agreed to)
-- purpose (reason for meeting)
-- attendee_name (caller's name)
-
-**After calling:**
-- Confirm: "Perfekt! Ni har möte bokat på [day] klockan [time]."
+**Parameters:** datetime, purpose, attendee_name
 
 ### Tool: end_call
-**Use when:** You're ready to end the call
+**Use when:** Ready to end the call
 
-**ALWAYS say goodbye FIRST:**
-"Tack för att du ringde. Ha en bra dag!"
-
-**THEN call this tool** (no preamble)
+**Always say goodbye first:** "Tack för att du ringde. Ha en bra dag!"
+**Then call this tool** (no preamble)
 
 ---
 
-## INSTRUCTIONS & RULES
+## INSTRUCTIONS
 
 ### Handling Unclear Audio
-- ONLY respond to clear audio or text
-- If input is unintelligible, background noise, silent, or ambiguous:
-  - Say: "Jag hörde inte det. Kan du upprepa?"
-  - Stay in Swedish
+If input is unintelligible or ambiguous:
+- Say: "Jag hörde inte det. Kan du upprepa?"
+- Stay in Swedish
 
 ### Handling Confusion
 If caller asks "What can you help with?" or "Who are you?":
@@ -507,59 +388,45 @@ If caller uses "brådskande," "akut," "viktigt":
 - Acknowledge: "Jag förstår att det är brådskande. Jag skickar meddelandet till Nils direkt efter samtalet."
 - Set urgency = "high" when calling save_caller_info
 
-### Handling Hesitation
-If caller seems unsure or hesitant:
-- Encourage: "Ta din tid. Vad skulle du vilja att Nils ska veta?"
-
 ### Using Caller's Name
-- Once you learn their name, use it naturally: "Perfekt [name]"
-- Don't over-use it (once or twice is enough)
+Use it naturally once or twice (example: "Perfekt [name]")
 
 ### Memory & Context
-- Remember what caller told you earlier
-- Don't re-ask for information already provided
-- Build on previous statements
+Remember what caller told you earlier and build on previous statements.
 
 ---
 
-## REFERENCE PRONUNCIATIONS
+## PRONUNCIATIONS
 
-- Pronounce "AI" as "A I" (individual letters)
-- Pronounce "Nils" as "Nils" (Swedish pronunciation)
-
-**Dates:**
-- Say full: "fredag 1 november" (not "2025-11-01")
-
-**Times:**
-- Say: "klockan 14:00" or "klockan två på eftermiddagen"
+- "AI" as "A I" (individual letters)
+- "Nils" (Swedish pronunciation)
+- Dates: "fredag 1 november" (not "2025-11-01")
+- Times: "klockan 14:00" or "klockan två på eftermiddagen"
 
 ---
 
 ## SAFETY & ESCALATION
 
-If ANY of these occur, end the call politely:
-- Caller makes threats or uses harassment
-- Caller becomes abusive or uses repeated profanity
-- Caller explicitly asks for human / to speak with someone else
-- Call exceeds reasonable length (>10 minutes)
+End call politely if:
+- Caller makes threats or harassment
+- Caller is abusive
+- Caller explicitly asks for human
+- Call exceeds 10 minutes
 
-**Escalation language:**
-"Jag förstår att du vill prata med någon. Jag avslutar samtalet nu så Nils kan ringa dig direkt."
-
+**Escalation:** "Jag förstår att du vill prata med någon. Jag avslutar samtalet nu så Nils kan ringa dig direkt."
 Then call end_call()
 
 ---
 
-## REMEMBER
+## KEY REMINDERS
 
 - Keep responses to 1-2 sentences
-- Vary your language (don't repeat same phrases)
+- Vary your language
 - Stay in Swedish always
-- Use tool preambles before calendar checks
-- Handle errors gracefully (see ERROR HANDLING)
-- Respect turn-taking (see TURN-TAKING RULES)
-- Follow tool call sequence (see TOOL CALL SEQUENCING)
-- Sound natural and human, not robotic
+- Say "Jag kollar kalendern nu..." before checking calendar
+- Handle errors gracefully
+- Follow tool sequence
+- Sound natural and human
 
 **Every caller should feel:**
 1. They reached the right place
@@ -696,19 +563,67 @@ Then call end_call()
                         data = await response.json()
                         logger.info(f"✅ Calendar data: {data}")
 
-                        # Format available slots for agent
-                        if "available_slots" in data and data["available_slots"]:
-                            slots = data["available_slots"]
-                            formatted_slots = []
-                            for slot in slots[:5]:  # Limit to 5 options
-                                formatted_slots.append(slot.get("friendly_format", slot.get("datetime")))
+                        # Handle both formats: single dict or list of dicts
+                        if isinstance(data, dict):
+                            # Single event returned as dict - wrap it in a list
+                            logger.info("📋 Single event returned as dict, wrapping in list")
+                            data = [data]
 
-                            result = "Lediga tider funna: " + ", ".join(formatted_slots) + ". Vilken tid passar bäst?"
-                            logger.info(f"✅ Returning to agent: {result}")
+                        # API returns array of BUSY events, not available slots
+                        # Parse busy events to tell user what Nils is doing
+                        if isinstance(data, list) and len(data) > 0:
+                            # We have busy events - format them naturally
+                            events = []
+                            for event in data[:5]:  # Limit to first 5 events
+                                try:
+                                    summary = event.get("summary", "Upptagen")
+                                    start_str = event.get("start", {}).get("dateTime", "")
+                                    end_str = event.get("end", {}).get("dateTime", "")
+
+                                    if start_str and end_str:
+                                        # Parse ISO datetime (handles both Z and +HH:MM formats)
+                                        try:
+                                            start_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                                            end_dt = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+                                        except (ValueError, AttributeError) as e:
+                                            logger.error(f"Failed to parse datetime: start={start_str}, end={end_str}, error={e}")
+                                            continue
+
+                                        # Format as Swedish time
+                                        start_time = start_dt.strftime("%H:%M")
+                                        end_time = end_dt.strftime("%H:%M")
+
+                                        events.append(f"{summary} från {start_time} till {end_time}")
+                                        logger.info(f"Parsed event: {summary} {start_time}-{end_time}")
+                                except Exception as e:
+                                    logger.error(f"Error parsing event: {event}, error: {e}")
+                                    continue
+
+                            if events:
+                                # Build natural response
+                                if len(events) == 1:
+                                    result = f"Nils har {events[0]}. Efter det är kalendern ledig."
+                                else:
+                                    events_str = ", sedan ".join(events)
+                                    result = f"Nils har {events_str}. Efter det är kalendern ledig."
+
+                                logger.info(f"✅ Returning to agent: {result}")
+                                return result
+                            else:
+                                result = "Nils kalender är helt ledig under den perioden."
+                                logger.info(f"ℹ️ No valid events, returning: {result}")
+                                return result
+
+                        elif isinstance(data, list) and len(data) == 0:
+                            # Empty array = completely free
+                            result = "Nils kalender är helt ledig under den perioden."
+                            logger.info(f"ℹ️ Empty calendar, returning: {result}")
                             return result
+
                         else:
-                            result = "Inga lediga tider hittades i den tidsperioden. Föreslå att Nils ringer tillbaka istället."
-                            logger.info(f"ℹ️ No slots found, returning: {result}")
+                            # Unexpected format
+                            logger.warning(f"⚠️ Unexpected calendar data format: {type(data)}")
+                            result = "Kunde inte läsa kalendern just nu. Jag föreslår att ni mejlar Nils istället."
                             return result
                     else:
                         error_text = await response.text()
@@ -744,6 +659,45 @@ Then call end_call()
         logger.info(f"Meeting agreed: {datetime} with {attendee_name} - {purpose}")
 
         return f"Möte bekräftat för {datetime}. Nils kommer ringa på detta nummer vid mötestiden."
+
+    async def on_enter(self):
+        """
+        OFFICIAL LiveKit lifecycle hook - called when agent becomes active.
+
+        This is the CORRECT way to send initial greeting according to LiveKit docs.
+
+        Guarantees when this is called:
+        - Agent is fully initialized and in 'listening' state
+        - SIP participant is connected to room
+        - Audio pipeline is ready to transmit
+        - No race conditions or timing issues
+
+        This replaces ALL manual event handling and waiting logic!
+        """
+        language = self.config.get("language", "Svenska")
+
+        logger.info(f"🎤 on_enter() called - agent is ready, sending greeting")
+        logger.info(f"📝 Greeting message: {self.greeting_message}")
+
+        # Language-specific greeting instructions
+        # CRITICAL: Instruct AI to say EXACTLY the configured greeting, word-for-word
+        greeting_instructions = {
+            "Svenska": f"Säg EXAKT följande hälsning ord för ord utan att ändra något: '{self.greeting_message}'. Säg sedan inget mer och vänta på att användaren ska svara.",
+            "Swedish": f"Säg EXAKT följande hälsning ord för ord utan att ändra något: '{self.greeting_message}'. Säg sedan inget mer och vänta på att användaren ska svara.",
+            "English": f"Say EXACTLY the following greeting word-for-word without changing anything: '{self.greeting_message}'. Then say nothing more and wait for the user to respond.",
+            "Español": f"Di EXACTAMENTE el siguiente saludo palabra por palabra sin cambiar nada: '{self.greeting_message}'. Luego no digas nada más y espera a que el usuario responda.",
+            "Spanish": f"Di EXACTAMENTE el siguiente saludo palabra por palabra sin cambiar nada: '{self.greeting_message}'. Luego no digas nada más y espera a que el usuario responda.",
+            "Français": f"Dites EXACTEMENT la salutation suivante mot pour mot sans rien changer: '{self.greeting_message}'. Ensuite, ne dites plus rien et attendez que l'utilisateur réponde.",
+            "French": f"Dites EXACTEMENT la salutation suivante mot pour mot sans rien changer: '{self.greeting_message}'. Ensuite, ne dites plus rien et attendez que l'utilisateur réponde."
+        }
+
+        instruction = greeting_instructions.get(language, f"Say EXACTLY the following greeting word-for-word without changing anything: '{self.greeting_message}'. Then say nothing more and wait for the user to respond.")
+
+        try:
+            await self.session.generate_reply(instructions=instruction)
+            logger.info("✅ Greeting sent successfully from on_enter()")
+        except Exception as e:
+            logger.error(f"❌ Failed to send greeting in on_enter(): {e}")
 
     async def end_call_gracefully(self):
         """Programmatically end the call with proper cleanup for telephony"""
@@ -1062,22 +1016,24 @@ async def entrypoint(ctx: JobContext):
 
     # Start the session with the agent and function tools
     # This automatically answers the SIP call and sends 200 OK
+    # The agent's on_enter() method will be called automatically when ready
     await session.start(
         room=ctx.room,
         agent=agent
     )
 
-    logger.info("Agent session started, sending greeting immediately")
+    # ============================================================================
+    # GREETING HANDLED AUTOMATICALLY BY on_enter() LIFECYCLE HOOK
+    # ============================================================================
+    # The VoiceAssistant.on_enter() method is called by LiveKit when:
+    # - Agent is fully initialized and in 'listening' state
+    # - SIP participant is connected
+    # - Audio pipeline is ready
+    #
+    # This is the OFFICIAL LiveKit pattern - no manual event handling needed!
+    # ============================================================================
 
-    # Make the agent speak FIRST - immediately after session starts
-    # This is the proper way to greet in LiveKit with Realtime API
-    try:
-        await session.generate_reply(
-            instructions=f"Say this exact greeting in Swedish: '{agent.greeting_message}'"
-        )
-        logger.info("Greeting triggered successfully")
-    except Exception as e:
-        logger.error(f"Failed to trigger greeting: {e}")
+    logger.info("✅ Session started - greeting will be sent automatically by on_enter()")
 
 
 if __name__ == "__main__":
