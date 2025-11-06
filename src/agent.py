@@ -14,7 +14,7 @@ from livekit.agents import JobContext, WorkerOptions, cli, get_job_context, RunC
 from livekit.agents.voice import AgentSession, Agent
 from livekit.agents import ConversationItemAddedEvent, UserInputTranscribedEvent, function_tool
 from livekit.plugins import openai
-from openai.types.beta.realtime.session import InputAudioTranscription
+from openai.types import realtime
 from dotenv import load_dotenv
 import yaml
 
@@ -375,9 +375,16 @@ def load_config():
     app_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(app_dir, "config", "agent.creation.md")
 
+    logger.info(f"[CONFIG DEBUG] app_dir: {app_dir}")
+    logger.info(f"[CONFIG DEBUG] config_path: {config_path}")
+    logger.info(f"[CONFIG DEBUG] File exists: {os.path.exists(config_path)}")
+
     try:
         with open(config_path, 'r', encoding='utf-8') as file:
             content = file.read()
+
+        logger.info(f"[CONFIG DEBUG] File content length: {len(content)} characters")
+        logger.info(f"[CONFIG DEBUG] First 200 chars: {content[:200]}")
 
         # Extract YAML content (skip markdown comments)
         yaml_lines = []
@@ -392,13 +399,25 @@ def load_config():
                 yaml_lines.append(line)
 
         yaml_content = '\n'.join(yaml_lines)
+        logger.info(f"[CONFIG DEBUG] YAML content length: {len(yaml_content)} characters")
+        logger.info(f"[CONFIG DEBUG] First 200 chars of YAML: {yaml_content[:200]}")
+
         config = yaml.safe_load(yaml_content)
+        logger.info(f"[CONFIG DEBUG] Parsed config type: {type(config)}")
+        logger.info(f"[CONFIG DEBUG] Config keys: {list(config.keys()) if isinstance(config, dict) else 'NOT A DICT'}")
+        logger.info(f"[CONFIG DEBUG] Language: {config.get('language', 'NOT FOUND') if isinstance(config, dict) else 'N/A'}")
+        logger.info(f"[CONFIG DEBUG] Voice: {config.get('voice', 'NOT FOUND') if isinstance(config, dict) else 'N/A'}")
+        logger.info(f"[CONFIG DEBUG] Has prompt: {'YES' if (isinstance(config, dict) and config.get('prompt')) else 'NO'}")
         logger.info(f"Loaded agent configuration from {config_path}")
         return config or {}
 
     except Exception as e:
-        logger.warning(f"Could not load agent config from {config_path}: {e}")
+        logger.error(f"[CONFIG DEBUG] Failed to load config: {e}")
+        import traceback
+        logger.error(f"[CONFIG DEBUG] Traceback: {traceback.format_exc()}")
         return {}
+
+
 
 
 class ConversationTracker:
@@ -406,14 +425,27 @@ class ConversationTracker:
         self.conversation_data = []
         self.start_time = time.time()
         self.call_id = None
+        self.transcript_file = None
 
     def add_item(self, role, content, timestamp=None):
-        self.conversation_data.append({
+        item = {
             "role": role,
             "content": content,
             "timestamp": timestamp or time.time(),
             "datetime": datetime.now().isoformat()
-        })
+        }
+        self.conversation_data.append(item)
+
+        # REAL-TIME TRANSCRIPT WRITING: Write immediately to file
+        # This bypasses LiveKit's delayed logs so you can see transcripts instantly
+        if self.transcript_file and content:
+            try:
+                with open(self.transcript_file, 'a', encoding='utf-8') as f:
+                    time_str = datetime.now().strftime("%H:%M:%S")
+                    f.write(f"[{time_str}] {role.upper()}: {content}\n")
+                    f.flush()  # Force write to disk immediately
+            except Exception as e:
+                logger.error(f"Failed to write transcript: {e}")
 
     def get_duration(self):
         return time.time() - self.start_time
@@ -501,8 +533,27 @@ Följ alltid "en fråga i taget" principen."""
         system_prompt = system_prompt.replace("{{referrer_name}}", self.lead_context.referrer)
         system_prompt = system_prompt.replace("{{lead_source}}", self.lead_context.source)
 
+        # CRITICAL: Prepend scenario-specific instructions based on lead_source
+        scenario_map = {
+            "cold": "SCENARIO 1: TRUE COLD CALL",
+            "form": "SCENARIO 2: WARM LEAD - FORM SUBMISSION",
+            "callback": "SCENARIO 3: CALLBACK/FOLLOW-UP"
+        }
+        scenario_name = scenario_map.get(self.lead_context.source, "SCENARIO 1: TRUE COLD CALL")
+
+        scenario_instruction = f"""
+# VIKTIGT: DETTA ÄR EN {scenario_name.upper()}
+
+Du är i {scenario_name}. Följ EXAKT det flödet från SCENARIO-sektionen i dina instruktioner.
+
+VARNING för COLD CALL: Säg ALDRIG att någon "pratade med dem förra veckan" eller liknande lögner.
+Detta är första kontakten. Var ärlig och direkt.
+
+"""
+        system_prompt = scenario_instruction + system_prompt
+
         # Add dynamic context header for outbound calls
-        if self.lead_context.source in ["cold", "form"]:
+        if self.lead_context.source in ["cold", "form", "callback"]:
             current_datetime = datetime.now(ZoneInfo("Europe/Stockholm"))
             swedish_days = {
                 "Monday": "måndag", "Tuesday": "tisdag", "Wednesday": "onsdag",
@@ -530,11 +581,14 @@ Följ alltid "en fråga i taget" principen."""
 - Kontaktperson: {self.lead_context.lead_name}
 - Företag: {self.lead_context.company}
 - Lead källa: {self.lead_context.source}
-- Refererad av: {self.lead_context.referrer}
-
 """
+            # Only add referrer info for callback/form scenarios, NOT cold calls
+            if self.lead_context.source in ["callback", "form"]:
+                context_header += f"- Refererad av: {self.lead_context.referrer}\n"
+
+            context_header += "\n"
             system_prompt = context_header + system_prompt
-            logger.info(f"📅 Injected context: {current_date_str} {current_time_str}, lead: {self.lead_context.lead_name}")
+            logger.info(f"📅 Injected context: {current_date_str} {current_time_str}, lead: {self.lead_context.lead_name}, scenario: {self.lead_context.source}")
 
         # Keep memory system but don't register as function tools to avoid conflicts
         # Memory data will be preserved but not exposed as AI tools yet
@@ -765,11 +819,30 @@ async def entrypoint(ctx: JobContext):
     # Create lead context
     lead_context = LeadContext(lead_metadata)
 
-    # Initialize conversation tracking
+    # Initialize conversation tracking with REAL-TIME file writing
     tracker = ConversationTracker()
     tracker.call_id = ctx.room.name
 
+    # Create transcripts directory if it doesn't exist (inside /app for Docker permissions)
+    transcripts_dir = os.path.join(os.path.dirname(__file__), "transcripts")
+    os.makedirs(transcripts_dir, exist_ok=True)
+
+    # Create unique transcript file with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    transcript_filename = f"transcript_{timestamp}_{tracker.call_id}.txt"
+    tracker.transcript_file = os.path.join(transcripts_dir, transcript_filename)
+
+    # Write header to transcript file
+    with open(tracker.transcript_file, 'w', encoding='utf-8') as f:
+        f.write(f"=== CALL TRANSCRIPT ===\n")
+        f.write(f"Room: {tracker.call_id}\n")
+        f.write(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Lead: {lead_context.lead_name} from {lead_context.company}\n")
+        f.write(f"Source: {lead_context.source}\n")
+        f.write(f"=" * 50 + "\n\n")
+
     logger.info(f"Starting hybrid outbound agent for room: {tracker.call_id}")
+    logger.info(f"📝 Real-time transcript: {tracker.transcript_file}")
     logger.info(f"Lead: {lead_context.lead_name} from {lead_context.company} (source: {lead_context.source})")
 
     # Get configuration values
@@ -777,6 +850,11 @@ async def entrypoint(ctx: JobContext):
     language = config.get("language", "English")
     model_config = config.get("advanced", {}).get("model_overrides", {})
 
+    logger.info(f"[ENTRYPOINT DEBUG] Config dict size: {len(config)} keys")
+    logger.info(f"[ENTRYPOINT DEBUG] Using voice: {voice_name} (fallback='cedar')")
+    logger.info(f"[ENTRYPOINT DEBUG] Using language: {language} (fallback='English')")
+    logger.info(f"[ENTRYPOINT DEBUG] Has prompt in config: {bool(config.get('prompt'))}")
+    logger.info(f"[ENTRYPOINT DEBUG] Model config: {model_config}")
     logger.info(f"Using voice: {voice_name}, language: {language}")
 
     # Create AgentSession with GPT-Realtime and configuration from file
@@ -784,19 +862,32 @@ async def entrypoint(ctx: JobContext):
 
     # Get language code for transcription
     language_code = LANGUAGE_CODES.get(language, "en")
-    transcription_prompt = f"{language} conversation with AI voice assistant"
+
+    # ============================================================================
+    # SPEECH-TO-SPEECH PIPELINE (GPT Realtime)
+    # ============================================================================
+    # GPT Realtime handles transcription internally - NO explicit InputAudioTranscription needed
+    # Adding InputAudioTranscription causes double transcription and worse quality
+    # Simple context hint is logged for debugging only, not used for transcription
+    # ============================================================================
+
+    logger.info(f"🎯 Speech-to-Speech Pipeline (GPT Realtime)")
+    logger.info(f"   Model: {model_config.get('primary_model', 'gpt-4o-realtime-preview')}")
+    logger.info(f"   Voice: {voice_name} (Swedish-optimized)")
+    logger.info(f"   Language: {language} ({language_code})")
+    logger.info(f"   Temperature: {model_config.get('temperature', 0.9)}")
+    logger.info(f"   Latency: ~300-500ms end-to-end (native speech-to-speech)")
+    logger.info(f"   Modalities: audio + text (function tools enabled)")
+    logger.info(f"   Flow: SIP(8kHz) → GPT Realtime (internal VAD/STT/LLM/TTS) → SIP(8kHz)")
 
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(
-            model=model_config.get("primary_model", "gpt-realtime"),
+            model=model_config.get("primary_model", "gpt-4o-realtime-preview"),
             voice=voice_name,
             modalities=["audio", "text"],
-            temperature=model_config.get("temperature", 0.7),
-            input_audio_transcription=InputAudioTranscription(
-                model="whisper-1",
-                language=language_code,
-                prompt=transcription_prompt
-            )
+            temperature=model_config.get("temperature", 0.9)
+            # Note: GPT Realtime already transcribes audio internally
+            # No InputAudioTranscription needed - it adds cost and hurts quality
         )
     )
 
@@ -872,38 +963,65 @@ async def entrypoint(ctx: JobContext):
     await agent.start_safety_monitor()
 
     # Start the session with the agent and function tools
+    # OUTBOUND CALL BEHAVIOR:
+    # - Person picks up phone (joins room)
+    # - AI waits for them to speak
+    # - If 5 seconds of SILENCE after they join, THEN AI speaks
+    # - Otherwise AI stays silent and waits
+    logger.info("Starting session - AI will wait for person to speak, or 5sec silence after join")
+
+    # Track greeting state
+    greeting_sent = False
+    person_joined = False
+    timeout_task = None
+    greeting_message = config.get("first_message", "Tjena! Finn från Finn AI här. Hur e läget?")
+
+    async def silence_timeout_greeting():
+        """If person joined but doesn't speak for 5 seconds, agent greets"""
+        nonlocal greeting_sent
+        await asyncio.sleep(5.0)
+
+        if not greeting_sent:
+            greeting_sent = True
+            logger.info("Person joined but no speech for 5s - agent sending greeting")
+            try:
+                await session.generate_reply(
+                    instructions=f"Personen svarade på telefonen men sa inget, så säg: '{greeting_message}'"
+                )
+            except Exception as e:
+                logger.error(f"Failed to send timeout greeting: {e}")
+
+    # Start the session
     await session.start(
         room=ctx.room,
         agent=agent
     )
 
-    # Get first message from config or use default
-    greeting_message = config.get("first_message", "Hello, thank you for calling. How can I help you today?")
+    logger.info("Session started - waiting for person to join room")
 
-    # Clean up multi-line YAML if needed
-    if isinstance(greeting_message, str):
-        greeting_message = greeting_message.strip().replace('\n', ' ')
+    # Participant join detection - start timeout ONLY after person answers phone
+    @ctx.room.on("participant_connected")
+    def on_participant_connected(participant: rtc.RemoteParticipant):
+        nonlocal person_joined, timeout_task, greeting_sent
 
-    logger.info(f"Sending greeting: {greeting_message}")
+        # Only trigger for SIP caller (not the agent itself)
+        if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:
+            person_joined = True
+            logger.info(f"Person answered phone ({participant.identity}) - starting 5s silence timeout")
 
-    # Send greeting with language-appropriate instruction
-    await asyncio.sleep(0.8)  # Small delay for audio pipeline
+            # Start timeout task NOW (person has joined, waiting for them to speak)
+            if not greeting_sent:
+                timeout_task = asyncio.create_task(silence_timeout_greeting())
 
-    # Language-specific greeting instructions
-    greeting_instructions = {
-        "Svenska": f"Säg hälsningen på svenska: '{greeting_message}' och vänta på svar.",
-        "Swedish": f"Säg hälsningen på svenska: '{greeting_message}' och vänta på svar.",
-        "English": f"Say the greeting in English: '{greeting_message}' and wait for response.",
-        "Español": f"Di el saludo en español: '{greeting_message}' y espera respuesta.",
-        "Spanish": f"Di el saludo en español: '{greeting_message}' y espera respuesta.",
-        "Français": f"Dites la salutation en français: '{greeting_message}' et attendez la réponse.",
-        "French": f"Dites la salutation en français: '{greeting_message}' et attendez la réponse."
-    }
-
-    instruction = greeting_instructions.get(language, f"Say the greeting: '{greeting_message}' and wait for response.")
-
-    greeting_handle = await session.generate_reply(instructions=instruction)
-    logger.info("Greeting sent successfully")
+    # Listen for first user speech to cancel timeout
+    @session.on("user_input_transcribed")
+    def on_first_speech(event):
+        nonlocal greeting_sent, timeout_task
+        if not greeting_sent and event.is_final and person_joined:
+            greeting_sent = True
+            if timeout_task:
+                timeout_task.cancel()
+            logger.info("Person spoke first - timeout greeting cancelled")
 
 
 if __name__ == "__main__":
