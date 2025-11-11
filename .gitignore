@@ -1,69 +1,26 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Environment
+﻿# Local env and secrets
 .env
 .env.local
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.claude/
+# Logs and temp
+*_logs*.txt
+agent_logs_latest.txt
+recent_logs.txt
+today_logs.txt
+temp_logs.txt
+full_logs_*.txt
 
-# LiveKit
-*.log
-logs/
+# Build/deploy temp
+deploy_tmp/
 
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Windows device names
+nul
+con
+prn
+aux
+com1
+lpt1
 
-# Audio files
-*.wav
-*.mp3
-*.m4a
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-
-# Test/debug files
-*-snippet.txt
-*-demo-snippet.txt
-test-*.py
-debug-*.py
+# Python cache
+__pycache__/
+*.pyc

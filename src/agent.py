@@ -13,6 +13,9 @@ from livekit.agents import ConversationItemAddedEvent, UserInputTranscribedEvent
 from livekit.plugins import openai
 from dotenv import load_dotenv
 import yaml
+import phonenumbers
+from phonenumbers import PhoneNumberFormat, NumberParseException
+from livekit.api import room_service
 
 # Load environment variables
 load_dotenv(".env.local")
@@ -43,10 +46,69 @@ TRANSCRIPTION_HINTS = {
     "de": "Telefongespräch auf Deutsch. Gesprochene Sprache, mögliche Hintergrundgeräusche."
 }
 
+CLOSING_KEYWORDS = [
+    "tack för att du ringde",
+    "tack för att du hörde av dig",
+    "ha en fin dag",
+    "ha en bra dag",
+    "ha en fantastisk dag",
+    "hej då",
+    "hejdå",
+    "vi hörs",
+]
 
+
+def format_phone_number(raw_phone: str, default_region: str = "SE", default_country_code: str = "+46") -> str | None:
+    """Normalize phone numbers to E.164 for SMS/webhook compatibility."""
+    if not raw_phone:
+        return None
+
+    candidate = raw_phone.strip()
+    candidate = candidate.replace("sip:", "").replace("tel:", "")
+
+    try:
+        if candidate.startswith("+"):
+            parsed = phonenumbers.parse(candidate, None)
+        else:
+            parsed = phonenumbers.parse(candidate, default_region)
+
+        if not phonenumbers.is_possible_number(parsed):
+            logger.warning(f"Phone number not possible: {candidate}")
+            return None
+
+        if not phonenumbers.is_valid_number(parsed):
+            logger.warning(f"Phone number not valid: {candidate}")
+
+        return phonenumbers.format_number(parsed, PhoneNumberFormat.E164)
+
+    except NumberParseException as exc:
+        logger.warning(f"Failed to parse phone number {candidate}: {exc}")
+        digits_only = "".join(ch for ch in candidate if ch.isdigit())
+        if not digits_only:
+            return None
+        if digits_only.startswith("00"):
+            digits_only = digits_only[2:]
+        return f"{default_country_code}{digits_only.lstrip('0')}"
+
+
+def extract_phone_from_identity(identity: str | None) -> str | None:
+    """Extract numeric phone portion from SIP participant identities."""
+    if not identity:
+        return None
+
+    value = identity.strip()
+    if value.startswith("sip_"):
+        value = value[4:]
+    elif value.startswith("sip:"):
+        value = value[4:]
+    elif value.startswith("tel:"):
+        value = value[4:]
+
+    return value or None
 def load_config():
-    """Load configuration from config/agent.creation.md"""
-    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "agent.creation.md")
+    """Load configuration from config/agent.creation.md and optional prompt file"""
+    project_root = os.path.dirname(os.path.dirname(__file__))
+    config_path = os.path.join(project_root, "config", "agent.creation.md")
 
     try:
         with open(config_path, 'r', encoding='utf-8') as file:
@@ -65,8 +127,23 @@ def load_config():
                 yaml_lines.append(line)
 
         yaml_content = '\n'.join(yaml_lines)
-        config = yaml.safe_load(yaml_content)
+        config = yaml.safe_load(yaml_content) or {}
         logger.info(f"Loaded agent configuration from {config_path}")
+
+        prompt_file = config.get("prompt_file")
+        if prompt_file:
+            prompt_path = prompt_file
+            if not os.path.isabs(prompt_file):
+                prompt_path = os.path.join(project_root, prompt_file.replace("/", os.sep))
+            try:
+                with open(prompt_path, 'r', encoding='utf-8') as prompt_handle:
+                    config["prompt"] = prompt_handle.read().strip()
+                logger.info(f"Loaded agent prompt from {prompt_path}")
+            except FileNotFoundError:
+                logger.warning(f"Prompt file not found: {prompt_path}")
+            except Exception as prompt_error:
+                logger.warning(f"Could not read prompt file {prompt_path}: {prompt_error}")
+
         return config or {}
 
     except Exception as e:
@@ -156,6 +233,11 @@ class VoiceAssistant(Agent):
 
         # Get greeting message from config
         self.greeting_message = config.get("first_message", "Jag är Nils AI-assistent. Han kunde inte svara men berätta varför du ringde så hjälper jag dig.").strip().replace('\n', ' ')
+        self.greeting_sent = False
+        self._greeting_lock = asyncio.Lock()
+        self.auto_end_task = None
+        self.auto_end_scheduled = False
+        self.call_end_started = False
 
         # Get current datetime in Swedish timezone (CET/CEST)
         # ZoneInfo handles automatic DST switching (UTC+1 winter, UTC+2 summer)
@@ -478,6 +560,72 @@ Then call end_call()
         self.session_ref = session
         self.ctx_ref = ctx
 
+    def _build_greeting_instruction(self):
+        language = self.config.get("language", "Svenska")
+        greeting_instructions = {
+            "Svenska": f"Säg EXAKT följande hälsning ord för ord utan att ändra något: '{self.greeting_message}'. Säg sedan inget mer och vänta på att användaren ska svara.",
+            "Swedish": f"Säg EXAKT följande hälsning ord för ord utan att ändra något: '{self.greeting_message}'. Säg sedan inget mer och vänta på att användaren ska svara.",
+            "English": f"Say EXACTLY the following greeting word-for-word without changing anything: '{self.greeting_message}'. Then say nothing more and wait for the user to respond.",
+            "Español": f"Di EXACTAMENTE el siguiente saludo palabra por palabra sin cambiar nada: '{self.greeting_message}'. Luego no digas nada más y espera a que el usuario responda.",
+            "Spanish": f"Di EXACTAMENTE el siguiente saludo palabra por palabra sin cambiar nada: '{self.greeting_message}'. Luego no digas nada más y espera a que el usuario responda.",
+            "Français": f"Dites EXACTEMENT la salutation suivante mot pour mot sans rien changer: '{self.greeting_message}'. Ensuite, ne dites plus rien et attendez que l'utilisateur réponde.",
+            "French": f"Dites EXACTEMENT la salutation suivante mot pour mot sans rien changer: '{self.greeting_message}'. Ensuite, ne dites plus rien et attendez que l'utilisateur réponde.",
+            "Deutsch": f"Sage GENAU den folgenden Gruß Wort für Wort ohne etwas zu ändern: '{self.greeting_message}'. Sage danach nichts mehr und warte auf die Antwort des Anrufers.",
+            "German": f"Sage GENAU den folgenden Gruß Wort für Wort ohne etwas zu ändern: '{self.greeting_message}'. Sage danach nichts mehr und warte auf die Antwort des Anrufers."
+        }
+        return greeting_instructions.get(
+            language,
+            f"Say EXACTLY the following greeting word-for-word without changing anything: '{self.greeting_message}'. Then say nothing more and wait for the user to respond."
+        )
+
+    async def send_greeting(self, trigger="manual"):
+        if self.greeting_sent:
+            logger.info(f"Greeting already sent, skipping trigger={trigger}")
+            return
+
+        if not self.session_ref:
+            logger.warning(f"No session reference available to send greeting (trigger={trigger})")
+            return
+
+        async with self._greeting_lock:
+            if self.greeting_sent:
+                return
+
+            instruction = self._build_greeting_instruction()
+            try:
+                logger.info(f"🎤 Sending greeting (trigger={trigger})")
+                speech_handle = await self.session_ref.generate_reply(instructions=instruction)
+                await asyncio.wait_for(speech_handle.wait(), timeout=15.0)
+                self.greeting_sent = True
+                logger.info("✅ Greeting sent successfully")
+            except asyncio.TimeoutError:
+                logger.error("Greeting speech handle timed out")
+            except Exception as e:
+                logger.error(f"❌ Failed to send greeting (trigger={trigger}): {e}")
+
+    def handle_assistant_message(self, message: str | None):
+        if not message or self.call_end_started or self.auto_end_scheduled:
+            return
+        normalized = message.lower()
+        if any(keyword in normalized for keyword in CLOSING_KEYWORDS):
+            logger.info("Detected closing language, scheduling automatic end_call()")
+            self.auto_end_scheduled = True
+            self.schedule_auto_end()
+
+    def schedule_auto_end(self, delay: float = 3.0):
+        if self.auto_end_task:
+            self.auto_end_task.cancel()
+        self.auto_end_task = asyncio.create_task(self._auto_end_call(delay))
+
+    async def _auto_end_call(self, delay: float):
+        try:
+            await asyncio.sleep(delay)
+            await self.end_call_gracefully(play_farewell=False)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self.auto_end_task = None
+
     def update_activity(self):
         """Update last activity timestamp"""
         self.last_activity_time = time.time()
@@ -520,8 +668,12 @@ Then call end_call()
             self.call_memory.caller_name = name
             logger.info(f"Saved caller name: {name}")
         if phone:
-            self.call_memory.caller_phone = phone
-            logger.info(f"Saved caller phone: {phone}")
+            formatted_phone = format_phone_number(phone)
+            if formatted_phone:
+                self.call_memory.caller_phone = formatted_phone
+                logger.info(f"Saved caller phone: {formatted_phone}")
+            else:
+                logger.warning(f"Could not normalize caller phone: {phone}")
         if email:
             self.call_memory.caller_email = email
             logger.info(f"Saved caller email: {email}")
@@ -613,10 +765,13 @@ Then call end_call()
 
         if not self.availability_fetched or self.availability_data is None:
             logger.warning("Availability not yet fetched, waiting...")
-            # Wait a bit for background fetch to complete
-            await asyncio.sleep(1)
-
-            if not self.availability_fetched:
+            # Wait up to ~3 seconds for background fetch to complete
+            for attempt in range(6):
+                await asyncio.sleep(0.5)
+                if self.availability_fetched and self.availability_data is not None:
+                    break
+            if not self.availability_fetched or self.availability_data is None:
+                logger.error("Availability still not ready after waiting")
                 return "Kalendern kunde inte hämtas just nu."
 
         data = self.availability_data
@@ -807,8 +962,8 @@ Then call end_call()
     @function_tool
     async def send_sms(self):
         """
-        Send SMS to the caller's phone number with booking information.
-        Uses the phone number already collected from the call.
+        Send SMS with informationsmaterial (priser, produktlänk etc.).
+        Inte för mötesbekräftelser – de görs i samtalet.
 
         Returns:
             Confirmation message if SMS sent successfully
@@ -816,7 +971,7 @@ Then call end_call()
         self.update_activity()
 
         # Get phone number from call memory (already collected from SIP participant)
-        phone_number = self.call_memory.caller_phone
+        phone_number = format_phone_number(self.call_memory.caller_phone) if self.call_memory.caller_phone else None
 
         if not phone_number:
             logger.error("Cannot send SMS - no phone number available")
@@ -872,42 +1027,34 @@ Then call end_call()
         """
         language = self.config.get("language", "Svenska")
 
-        logger.info(f"🎤 on_enter() called - agent is ready, sending greeting")
-        logger.info(f"📝 Greeting message: {self.greeting_message}")
+        logger.info("🎤 on_enter() called - agent is ready, waiting for participant before greeting")
+        logger.info(f"📝 Greeting message prepared: {self.greeting_message}")
 
         # Start background availability fetch (7-day window)
         # This runs silently without blocking the greeting
         asyncio.create_task(self.fetch_availability_background())
         logger.info("🔄 Background availability fetch started")
 
-        # Language-specific greeting instructions
-        # CRITICAL: Instruct AI to say EXACTLY the configured greeting, word-for-word
-        greeting_instructions = {
-            "Svenska": f"Säg EXAKT följande hälsning ord för ord utan att ändra något: '{self.greeting_message}'. Säg sedan inget mer och vänta på att användaren ska svara.",
-            "Swedish": f"Säg EXAKT följande hälsning ord för ord utan att ändra något: '{self.greeting_message}'. Säg sedan inget mer och vänta på att användaren ska svara.",
-            "English": f"Say EXACTLY the following greeting word-for-word without changing anything: '{self.greeting_message}'. Then say nothing more and wait for the user to respond.",
-            "Español": f"Di EXACTAMENTE el siguiente saludo palabra por palabra sin cambiar nada: '{self.greeting_message}'. Luego no digas nada más y espera a que el usuario responda.",
-            "Spanish": f"Di EXACTAMENTE el siguiente saludo palabra por palabra sin cambiar nada: '{self.greeting_message}'. Luego no digas nada más y espera a que el usuario responda.",
-            "Français": f"Dites EXACTEMENT la salutation suivante mot pour mot sans rien changer: '{self.greeting_message}'. Ensuite, ne dites plus rien et attendez que l'utilisateur réponde.",
-            "French": f"Dites EXACTEMENT la salutation suivante mot pour mot sans rien changer: '{self.greeting_message}'. Ensuite, ne dites plus rien et attendez que l'utilisateur réponde."
-        }
+        # If SIP participant already connected before this hook completes, send greeting immediately
+        if self.ctx_ref and self.ctx_ref.room.remote_participants:
+            logger.info("Participant already connected before greeting - sending now")
+            asyncio.create_task(self.send_greeting(trigger="on_enter_existing_participant"))
 
-        instruction = greeting_instructions.get(language, f"Say EXACTLY the following greeting word-for-word without changing anything: '{self.greeting_message}'. Then say nothing more and wait for the user to respond.")
-
-        try:
-            await self.session.generate_reply(instructions=instruction)
-            logger.info("✅ Greeting sent successfully from on_enter()")
-        except Exception as e:
-            logger.error(f"❌ Failed to send greeting in on_enter(): {e}")
-
-    async def end_call_gracefully(self):
+    async def end_call_gracefully(self, play_farewell: bool = True):
         """Programmatically end the call with proper cleanup for telephony"""
+        if self.call_end_started:
+            logger.info("Call termination already in progress")
+            return
+        self.call_end_started = True
+        if self.auto_end_task:
+            self.auto_end_task.cancel()
+            self.auto_end_task = None
         try:
             # Stop safety monitor
             if self.safety_monitor_task:
                 self.safety_monitor_task.cancel()
                 logger.info("Safety monitor stopped")
-            if self.session_ref:
+            if self.session_ref and play_farewell:
                 logger.info("Generating farewell message...")
                 speech_handle = await self.session_ref.generate_reply(
                     instructions="Säg hejdå på svenska och avsluta samtalet vänligt."
@@ -920,41 +1067,18 @@ Then call end_call()
                 # Small delay to ensure audio transmission completes
                 await asyncio.sleep(1.0)
 
-            # CRITICAL: Use delete_room() for proper SIP termination
-            # This ensures SIP BYE signal is sent to Telnyx to prevent phantom billing
-            # ctx.shutdown() alone does NOT properly terminate SIP calls!
             ctx = get_job_context()
-            if ctx:
-                logger.info(f"Deleting room to end SIP call: {ctx.room.name}")
-                await ctx.api.room.delete_room(
-                    api.DeleteRoomRequest(room=ctx.room.name)
-                )
-                logger.info("Room deleted - SIP call terminated successfully")
-            else:
-                logger.warning("No job context available for shutdown")
+            await terminate_sip_call(ctx, logger)
 
         except asyncio.TimeoutError:
             logger.warning("Farewell message timed out, force terminating")
             ctx = get_job_context()
-            if ctx:
-                logger.info(f"Force deleting room due to timeout: {ctx.room.name}")
-                await ctx.api.room.delete_room(
-                    api.DeleteRoomRequest(room=ctx.room.name)
-                )
-                logger.info("Room deleted after timeout")
+            await terminate_sip_call(ctx, logger)
         except Exception as e:
             logger.error(f"Error during call termination: {e}")
             # Ensure call still ends even with errors
-            try:
-                ctx = get_job_context()
-                if ctx:
-                    logger.info(f"Force deleting room due to error: {ctx.room.name}")
-                    await ctx.api.room.delete_room(
-                        api.DeleteRoomRequest(room=ctx.room.name)
-                    )
-                    logger.info("Room deleted after error")
-            except Exception as cleanup_error:
-                logger.error(f"Failed to cleanup call: {cleanup_error}")
+            ctx = get_job_context()
+            await terminate_sip_call(ctx, logger)
 
 
 @function_tool
@@ -974,18 +1098,53 @@ async def end_call():
 
     logger.info("Function tool called to end call")
 
-    # Wait 3 seconds to allow the AI's goodbye message to finish speaking
-    # before terminating the call
-    await asyncio.sleep(3)
-
-    # CRITICAL: Use delete_room() for proper SIP termination
-    # This ensures SIP BYE signal is sent to Telnyx to prevent phantom billing
-    logger.info(f"Deleting room to end SIP call: {ctx.room.name}")
-    await ctx.api.room.delete_room(
-        api.DeleteRoomRequest(room=ctx.room.name)
-    )
-    logger.info("Room deleted - SIP call terminated")
+    agent = getattr(ctx, "_agent_instance", None)
+    if agent:
+        await agent.end_call_gracefully()
+    else:
+        await terminate_sip_call(ctx, logger)
     return "Call ended successfully"
+
+
+async def terminate_sip_call(ctx: JobContext | None, logger: logging.Logger):
+    """Ensure SIP participant and room are fully terminated."""
+    if ctx is None:
+        logger.warning("terminate_sip_call called without job context")
+        return
+
+    room_name = getattr(ctx.room, "name", "unknown-room")
+    participants = list(getattr(ctx.room, "remote_participants", {}).values()) if ctx.room else []
+
+    for participant in participants:
+        identity = getattr(participant, "identity", None)
+        if not identity:
+            continue
+        try:
+            await ctx.api.room.remove_participant(
+                room_service.RoomParticipantIdentity(room=room_name, identity=identity)
+            )
+            logger.info(f"Removed participant {identity} before deleting room")
+        except Exception as e:
+            logger.error(f"Failed to remove participant {identity}: {e}")
+
+    try:
+        await ctx.api.room.delete_room(api.DeleteRoomRequest(room=room_name))
+        logger.info("Room deleted - SIP call terminated")
+    except Exception as e:
+        logger.error(f"Failed to delete room {room_name}: {e}")
+
+    try:
+        if ctx.room and ctx.room.isconnected():
+            await ctx.room.disconnect()
+            logger.info("RTC room disconnected")
+    except Exception as e:
+        logger.error(f"Failed to disconnect RTC room: {e}")
+
+    try:
+        ctx.shutdown("terminated_by_ai")
+        logger.info("Job context shutdown complete")
+    except Exception as e:
+        logger.error(f"Failed to shutdown job context: {e}")
 
 
 async def send_webhook(tracker: ConversationTracker, agent: 'VoiceAssistant'):
@@ -1139,6 +1298,9 @@ async def entrypoint(ctx: JobContext):
         )
         logger.info(f"Conversation item from {event.item.role}: {event.item.text_content[:50]}...")
 
+        if event.item.role == "assistant" and hasattr(session, "_agent_ref") and session._agent_ref:
+            session._agent_ref.handle_assistant_message(event.item.text_content)
+
         # Track timing for latency measurement
         if event.item.role == "user":
             user_speech_end_time = time.time()
@@ -1165,17 +1327,40 @@ async def entrypoint(ctx: JobContext):
             if hasattr(session, '_agent_ref') and session._agent_ref:
                 session._agent_ref.update_activity()
 
+    # Create agent with configuration
+    agent = VoiceAssistant(config, tools=[end_call])
+    agent.set_session_refs(session, ctx)
+    ctx._agent_instance = agent
+
+    # Placeholder for caller phone detected pre-connect
+    caller_phone = None
+    for identity, participant in ctx.room.remote_participants.items():
+        phone_candidate = extract_phone_from_identity(identity)
+        if phone_candidate:
+            caller_phone = phone_candidate
+            logger.info(f"Extracted caller phone from existing participant: {caller_phone}")
+            break
+
+    greeting_participant_kinds = {
+        rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+        rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    }
+
     # Participant connect detection - log when SIP user joins
     @ctx.room.on("participant_connected")
     def on_participant_connected(participant: rtc.RemoteParticipant):
         logger.info(f"Participant connected: {participant.identity}, kind: {participant.kind}")
+        phone_candidate = extract_phone_from_identity(participant.identity)
+        if phone_candidate:
+            logger.info(f"Detected caller phone on connect: {phone_candidate}")
+            asyncio.create_task(agent.save_caller_info(phone=phone_candidate))
 
     # Participant disconnect detection
     @ctx.room.on("participant_disconnected")
     def on_participant_disconnected(participant: rtc.RemoteParticipant):
         logger.info(f"Participant disconnected: {participant.identity}")
         # If the caller (not agent) disconnects, stop safety monitor and end the call
-        if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:
+        if participant.kind in greeting_participant_kinds:
             logger.warning("Caller disconnected, stopping safety monitor")
             # Stop safety monitor immediately
             if agent.safety_monitor_task:
@@ -1183,22 +1368,29 @@ async def entrypoint(ctx: JobContext):
                 logger.info("Safety monitor stopped due to participant disconnect")
             # The session will close automatically, no need to manually end call
 
-    # Extract caller phone number from room participants
-    caller_phone = None
-    for identity, participant in ctx.room.remote_participants.items():
-        if identity.startswith("sip_"):
-            caller_phone = identity.replace("sip_", "")
-            logger.info(f"Extracted caller phone: {caller_phone}")
-            break
-
-    # Create agent with configuration
-    agent = VoiceAssistant(config, tools=[end_call])
-    agent.set_session_refs(session, ctx)
-
     # Store caller phone number in memory if found
     if caller_phone:
         await agent.save_caller_info(phone=caller_phone)
         logger.info(f"Auto-stored caller phone: {caller_phone}")
+
+    def has_active_audio_track() -> bool:
+        for participant in ctx.room.remote_participants.values():
+            if participant.kind not in greeting_participant_kinds:
+                continue
+            for publication in participant.track_publications.values():
+                if publication.kind == rtc.TrackKind.KIND_AUDIO and publication.subscribed:
+                    return True
+        return False
+
+    @ctx.room.on("track_subscribed")
+    def on_track_subscribed(track, publication, participant):
+        if isinstance(track, rtc.RemoteAudioTrack) and participant.kind in greeting_participant_kinds:
+            logger.info("Remote audio track subscribed - triggering greeting")
+            asyncio.create_task(agent.send_greeting(trigger="track_subscribed"))
+
+    if has_active_audio_track():
+        logger.info("Remote audio already active - triggering greeting immediately")
+        asyncio.create_task(agent.send_greeting(trigger="existing_audio_track"))
 
     # Store agent reference in session for event handlers
     session._agent_ref = agent
@@ -1223,18 +1415,7 @@ async def entrypoint(ctx: JobContext):
         agent=agent
     )
 
-    # ============================================================================
-    # GREETING HANDLED AUTOMATICALLY BY on_enter() LIFECYCLE HOOK
-    # ============================================================================
-    # The VoiceAssistant.on_enter() method is called by LiveKit when:
-    # - Agent is fully initialized and in 'listening' state
-    # - SIP participant is connected
-    # - Audio pipeline is ready
-    #
-    # This is the OFFICIAL LiveKit pattern - no manual event handling needed!
-    # ============================================================================
-
-    logger.info("✅ Session started - greeting will be sent automatically by on_enter()")
+    logger.info("✅ Session started - greeting will trigger when SIP participant audio is ready")
 
 
 if __name__ == "__main__":

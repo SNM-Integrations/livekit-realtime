@@ -3,9 +3,6 @@
 
 [project]
 # Project subdomain - found in your LiveKit Cloud project URL
-# Example: if your URL is wss://my-project-abc123.livekit.cloud
-# then subdomain = "my-project-abc123"
-# Run `lk project list` to see your projects and get the subdomain
 subdomain = "samuels-agent-qyhykxsz"
 
 [build]

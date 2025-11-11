@@ -1,8 +1,10 @@
-language: "English"
-voice: "cedar"
+language: "Svenska"
+voice: "marin"
 
 first_message: >
-  Hi, this is Elsa from FinAI, how can I help you today?
+  Hej, du har kommit fram till Elsa. Hur kan jag hjälpa dig idag?
+
+prompt_file: "config/prompts/finn_sales_agent_sv.md"
 
 advanced:
   model_overrides:
