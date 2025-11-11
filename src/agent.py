@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -16,12 +17,17 @@ import yaml
 import phonenumbers
 from phonenumbers import PhoneNumberFormat, NumberParseException
 from livekit.api import room_service
+from components.scribe_streaming import ElevenLabsScribeStreamer, stream_track_to_scribe
 
 # Load environment variables
 load_dotenv(".env.local")
 load_dotenv()
 
 logger = logging.getLogger("voice-agent")
+
+SCRIBE_ENABLED = os.getenv("SCRIBE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+SCRIBE_API_KEY = os.getenv("SCRIBE_API_KEY")
+SCRIBE_LANGUAGE = os.getenv("SCRIBE_LANGUAGE", "sv")
 
 # Language code mapping for Whisper transcription
 LANGUAGE_CODES = {
@@ -238,6 +244,9 @@ class VoiceAssistant(Agent):
         self.auto_end_task = None
         self.auto_end_scheduled = False
         self.call_end_started = False
+        self.scribe_task = None
+        self.scribe_streamer: ElevenLabsScribeStreamer | None = None
+        self.scribe_transcripts: list[dict] = []
 
         # Get current datetime in Swedish timezone (CET/CEST)
         # ZoneInfo handles automatic DST switching (UTC+1 winter, UTC+2 summer)
@@ -625,6 +634,48 @@ Then call end_call()
             pass
         finally:
             self.auto_end_task = None
+
+    async def start_scribe_stream(self, track: rtc.RemoteAudioTrack):
+        if self.scribe_task or not SCRIBE_ENABLED or not SCRIBE_API_KEY:
+            return
+
+        def wrapper(coro):
+            return asyncio.create_task(coro)
+
+        async def on_partial(text: str):
+            logger.debug(f"Scribe partial: {text[:80]}")
+
+        async def on_commit(payload: dict):
+            transcript_text = payload.get("text") or payload.get("transcript") or payload.get("transcript_text")
+            if isinstance(transcript_text, dict):
+                transcript_text = transcript_text.get("text")
+            if not transcript_text:
+                return
+            entry = {
+                "text": transcript_text,
+                "timestamp": time.time(),
+            }
+            self.scribe_transcripts.append(entry)
+
+        self.scribe_streamer = ElevenLabsScribeStreamer(
+            api_key=SCRIBE_API_KEY,
+            language_code=SCRIBE_LANGUAGE,
+            commit_strategy="vad",
+            on_partial=on_partial,
+            on_commit=on_commit,
+        )
+        self.scribe_task = wrapper(stream_track_to_scribe(track, self.scribe_streamer))
+        logger.info("Started ElevenLabs Scribe streaming")
+
+    async def stop_scribe_stream(self):
+        if self.scribe_task:
+            self.scribe_task.cancel()
+            with contextlib.suppress(Exception):
+                await self.scribe_task
+            self.scribe_task = None
+        if self.scribe_streamer:
+            await self.scribe_streamer.close()
+            self.scribe_streamer = None
 
     def update_activity(self):
         """Update last activity timestamp"""
@@ -1049,6 +1100,7 @@ Then call end_call()
         if self.auto_end_task:
             self.auto_end_task.cancel()
             self.auto_end_task = None
+        await self.stop_scribe_stream()
         try:
             # Stop safety monitor
             if self.safety_monitor_task:
@@ -1183,7 +1235,8 @@ async def send_webhook(tracker: ConversationTracker, agent: 'VoiceAssistant'):
         "meeting_attendee": agent.meeting_attendee,
 
         # Raw conversation data for debugging
-        "conversation_raw": tracker.conversation_data
+        "conversation_raw": tracker.conversation_data,
+        "scribe_transcripts": getattr(agent, "scribe_transcripts", None),
     }
 
     try:
@@ -1367,29 +1420,37 @@ async def entrypoint(ctx: JobContext):
                 agent.safety_monitor_task.cancel()
                 logger.info("Safety monitor stopped due to participant disconnect")
             # The session will close automatically, no need to manually end call
+            asyncio.create_task(agent.stop_scribe_stream())
 
     # Store caller phone number in memory if found
     if caller_phone:
         await agent.save_caller_info(phone=caller_phone)
         logger.info(f"Auto-stored caller phone: {caller_phone}")
 
-    def has_active_audio_track() -> bool:
+    def has_active_audio_track() -> rtc.RemoteAudioTrack | None:
         for participant in ctx.room.remote_participants.values():
             if participant.kind not in greeting_participant_kinds:
                 continue
             for publication in participant.track_publications.values():
-                if publication.kind == rtc.TrackKind.KIND_AUDIO and publication.subscribed:
-                    return True
-        return False
+                if (
+                    publication.kind == rtc.TrackKind.KIND_AUDIO
+                    and publication.subscribed
+                    and publication.track
+                ):
+                    return publication.track
+        return None
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track, publication, participant):
         if isinstance(track, rtc.RemoteAudioTrack) and participant.kind in greeting_participant_kinds:
-            logger.info("Remote audio track subscribed - triggering greeting")
+            logger.info("Remote audio track subscribed - triggering greeting and Scribe")
+            asyncio.create_task(agent.start_scribe_stream(track))
             asyncio.create_task(agent.send_greeting(trigger="track_subscribed"))
 
-    if has_active_audio_track():
+    existing_track = has_active_audio_track()
+    if existing_track:
         logger.info("Remote audio already active - triggering greeting immediately")
+        asyncio.create_task(agent.start_scribe_stream(existing_track))
         asyncio.create_task(agent.send_greeting(trigger="existing_audio_track"))
 
     # Store agent reference in session for event handlers
