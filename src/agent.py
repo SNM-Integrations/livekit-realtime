@@ -828,13 +828,27 @@ async def entrypoint(ctx: JobContext):
 
     # Parse metadata for lead context
     lead_metadata = {}
+
+    # DEBUG: Check ALL possible metadata sources
+    logger.info(f"🔍 METADATA DEBUG:")
+    logger.info(f"   ctx.job exists: {hasattr(ctx, 'job')}")
+    logger.info(f"   ctx.job.metadata: {ctx.job.metadata if hasattr(ctx, 'job') and ctx.job else 'NO JOB'}")
+    logger.info(f"   ctx.room.metadata: {ctx.room.metadata if hasattr(ctx.room, 'metadata') else 'NO ROOM METADATA'}")
+    logger.info(f"   ctx.room.name: {ctx.room.name}")
+
     try:
         if ctx.job.metadata:
             lead_metadata = json.loads(ctx.job.metadata)
-            logger.info(f"📝 RAW METADATA RECEIVED:")
+            logger.info(f"📝 RAW METADATA FROM JOB:")
             logger.info(f"   {json.dumps(lead_metadata, indent=2)}")
+        else:
+            logger.warning(f"⚠️ ctx.job.metadata is EMPTY - checking room metadata...")
+            if hasattr(ctx.room, 'metadata') and ctx.room.metadata:
+                lead_metadata = json.loads(ctx.room.metadata)
+                logger.info(f"📝 RAW METADATA FROM ROOM:")
+                logger.info(f"   {json.dumps(lead_metadata, indent=2)}")
     except Exception as e:
-        logger.warning(f"⚠️ Could not parse metadata: {e}")
+        logger.error(f"⚠️ Could not parse metadata: {e}")
 
     # Create lead context
     lead_context = LeadContext(lead_metadata)
