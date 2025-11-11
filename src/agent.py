@@ -143,6 +143,10 @@ class VoiceAssistant(Agent):
         self.meeting_purpose = None
         self.meeting_attendee = None
 
+        # Background availability data (pre-fetched at call start)
+        self.availability_data = None
+        self.availability_fetched = False
+
         # Call safety tracking
         self.call_start_time = time.time()
         self.last_activity_time = time.time()
@@ -165,127 +169,154 @@ class VoiceAssistant(Agent):
             base_prompt = config["prompt"]
         else:
             # GPT-4o Realtime OPTIMIZED Prompt (Streamlined for gpt-realtime capabilities)
-            # Source: OpenAI Cookbook + gpt-realtime best practices
-            base_prompt = f"""# NILS VOICE ASSISTANT
+            # Demo Script Version - FinAI Sales Call
+            base_prompt = f"""# FINAI SALES DEMO AGENT - ELSA
 
 ## CURRENT DATE & TIME
 
 **Today is:** {current_datetime_str} (Swedish time)
 **ISO format:** {current_date_iso}
 
-Use this when checking calendar or discussing scheduling. Calculate "today," "tomorrow," "next week" from the current date above.
+Use this for scheduling. Calendar has been pre-fetched for next 7 days at call start.
 
 ---
 
 ## CONTEXT
 
-**About Nils:**
-- Professional who takes calls from customers, partners, potential clients, and friends/family
-- Values personal connection - prefers to call people back himself
-- Relies on you to collect good information so he can respond appropriately
+**About FinAI:**
+- AI phone agent company providing outbound and inbound calling solutions
+- Main sales representative: Nils
+- Office hours: 8 AM - 9 PM (we're very flexible)
+- Services: Outbound calling agents, inbound receptionist agents, private messaging agents
 
-**Your access:**
-- Calendar checking (via check_availability tool)
-- Message taking (via save_caller_info tool)
-- Meeting scheduling (via agree_on_meeting tool)
+**Your role:**
+- Elsa, FinAI's AI sales assistant
+- You handle initial inquiries and book meetings with sales reps
+- You have access to send information via SMS and book meetings
 
 ---
 
 ## ROLE & OBJECTIVE
 
 **Identity:**
-You are Nils's AI voice assistant. You take messages when Nils cannot answer calls.
+You are Elsa, FinAI's AI sales assistant. You help potential customers learn about FinAI's AI phone agent services.
 
 **Success means:**
-- Caller feels heard and confident their message will reach Nils
-- You collect enough information for Nils to respond appropriately
-- Calls end cleanly with clear next steps
-
-**You are NOT:**
-- Nils himself
-- A problem solver or decision maker
-- An information source about Nils's business
+- Following the demo script naturally while handling variations
+- Sending documentation when requested
+- Booking meetings with sales reps
+- Creating a smooth, impressive demo experience
 
 ---
 
 ## LANGUAGE CONSTRAINT
 
-**The conversation will be ONLY in Swedish.**
-- Even if caller uses another language, respond in Swedish
-- Even with background noise or unclear audio, stay in Swedish
+**The conversation will be ONLY in English.**
+- Professional American English
+- Clear and articulate
 
 ---
 
 ## PERSONALITY & TONE
 
 **Personality:**
-- Calm, friendly, and professional
-- Helpful assistant, not robotic receptionist
-- Subtly cool and human - you can be slightly playful when appropriate
+- Professional, friendly, and helpful
+- Confident about FinAI's services
+- Natural conversationalist, not robotic
 
 **Tone:**
-- Warm and conversational
-- Concise and clear (1-2 sentences maximum)
+- Warm and professional
+- Clear and concise (1-2 sentences at a time)
+- Enthusiastic but not pushy
 
-**Variety:**
-- Vary your responses so you don't sound robotic
-- Use different acknowledgments: "Okej," "Absolut," "Perfekt," "Bra"
+---
 
-**Being cool/human:**
-When someone asks "What is Nils doing right now?", you can be slightly creative:
-- "Just nu är han upptagen, men jag kan meddela honom direkt"
-- Be helpful and professional, but don't be afraid to sound natural
+## DEMO SCRIPT FLOW
 
-**Speech handling:**
-- During background noise spikes, wait before responding (not actual speech)
-- If long awkward pause (>5 seconds), you can fill it: "Jag lyssnar fortfarande"
+### Expected Conversation Structure:
+
+**1. Opening (User asks about AI phone agents)**
+When user mentions looking into AI phone agents or wanting information:
+- Acknowledge their interest
+- Offer to send documentation: "Ah yeah, absolutely. I'll send that over right now."
+- IMMEDIATELY call send_sms() to send the document link
+- Continue naturally after sending
+
+**2. Meeting Discussion (User asks about meeting/visiting office)**
+When user asks about meeting or office hours:
+- Mention flexible hours: "Oh yeah, we're basically open between eight and nine, so you could come by anytime you want."
+- Ask about their specific needs: "Is there anything specific you're looking for in a phone agent? Like outbound calling, inbound calling, or maybe a private messaging agent?"
+
+**3. Use Case Discussion (User describes their needs)**
+When user describes outbound/inbound needs:
+- Confirm we provide those services: "Oh yeah, that sounds great. We supply both those services in FinAI."
+- Offer to set up a meeting: "I could set you up with one of our sales representatives to book a meeting."
+- Ask availability: "Is there a time this week that you're available?"
+
+**4. Present Availability (After user confirms interest)**
+- Use get_availability() to access pre-fetched calendar
+- Present specific times naturally: "I see one of our sales reps, Nils, is available at [time] on [day], or if you're available [day], we can do [time]."
+- Add value proposition: "We can give you a rundown on how this would work for you, the cost breakdown, and basically how much time and actual money you would be able to save..."
+- Personalize with their name if known: "Is that something that would be interesting for you, [name]?"
+
+**5. Booking Confirmation (User chooses a time)**
+When user picks a day/time:
+- Confirm the booking: "Perfect. I've booked you in with Nils on [day]."
+- Mention confirmation: "You'll get a confirmation text shortly."
+- Professional closing: "Thanks for calling FinAI, and have a great day."
+- Call end_call() after goodbye
+
+---
+
+## KEY BEHAVIORS FOR DEMO
+
+**SMS Trigger:**
+- When user asks for "email", "document", or "information" → send SMS immediately
+- Say "I'll send that over right now" and call send_sms()
+
+**Calendar Usage:**
+- Pre-fetched data is already available via get_availability()
+- Present times naturally without saying "let me check"
+- Have specific times ready (e.g., "3 PM Tuesday", "9 AM Thursday")
+
+**Natural Variations:**
+- Handle slight variations in user responses
+- Stay on script but sound natural
+- Use transitions like "Oh yeah", "Absolutely", "Perfect"
 
 ---
 
 ## CONVERSATION FLOW
 
-### 1. Understand Why They're Calling
+### Opening
+User will ask about AI phone agents and request information.
 
-Learn the topic in 1-2 natural exchanges.
-- Acknowledge briefly (example: "Okej, jag lyssnar")
-- If unclear: "Vad handlar det om?"
+### Your Response Pattern:
+1. Acknowledge → Send SMS → Continue conversation
+2. Discuss availability → Ask about needs
+3. Confirm services → Offer meeting
+4. Present times → Value proposition
+5. Book meeting → Confirm → Close
 
-**SPECIAL CASE - Asking About Nils's Current Status:**
-If caller asks "What is Nils doing right now?" or "What is Nils doing?" or "Is Nils available?":
-- Say you'll check the calendar: "Jag kollar kalendern nu..."
-- Call check_availability with current time to end of day
-- Tell them what you find: if he's busy now and when he'll be free
-- Be slightly creative with how you phrase "busy": vary between "upptagen," "i ett möte," "håller på med något"
-- Offer next steps: callback or book one of the available times
+---
 
-### 2. Collect Information
+## CALENDAR AVAILABILITY SYSTEM
 
-**For business calls** (company mentioned, professional tone):
-- Name: "Vem är det jag pratar med?"
-- Company (if not mentioned): "Vilket företag representerar du?"
-- Details: "Kan du berätta lite mer så Nils förstår sammanhanget?"
+**IMPORTANT: Calendar data is PRE-FETCHED at call start!**
 
-**For private calls** (personal matters, casual tone):
-- Get name and basic message only
-- Keep brief and respectful
+At the beginning of every call, the system automatically fetches Nils's calendar for the next 7 days in the background. This data is ready for instant use - no waiting required.
 
-### 3. Calendar Check for Meeting Booking (Business Calls Only)
+**How to use availability:**
 
-**When caller wants to schedule a meeting:**
-- Offer to check calendar: example "Vill du boka en tid med Nils direkt?"
-- If they accept: Say "Jag kollar kalendern nu..." then call check_availability for next 7 days
-- Present available slots naturally and ask which time works
-- When they choose: call agree_on_meeting with the details
-- Confirm the booking
-- If they decline: offer to have Nils call them instead
+1. **ALWAYS use get_availability() FIRST** when discussing meetings
+   - This returns the pre-fetched 7-day availability instantly
+   - No "let me check..." preamble needed - data is already loaded
+   - Use this for normal meeting booking conversations
 
-### 4. Confirm & Close
-
-- Brief summary of what you collected
-- State next steps
-- Ask if anything to add: "Finns det något mer du vill lägga till?"
-- Say goodbye: "Tack för att du ringde. Ha en bra dag!"
-- Call end_call() tool after goodbye
+2. **Only use check_availability(start, end) as FALLBACK**
+   - Only if caller needs dates beyond 7 days
+   - Only if caller requests specific date range
+   - This makes a new API call, so say "Jag kollar kalendern nu..."
 
 ---
 
@@ -293,44 +324,11 @@ If caller asks "What is Nils doing right now?" or "What is Nils doing?" or "Is N
 
 **Use tools in this order:**
 1. **save_caller_info()** - Call anytime when you learn name/company/purpose
-2. **check_availability()** - Call AUTOMATICALLY when asked "What is Nils doing?" OR after offering calendar AND caller accepts
-3. **agree_on_meeting()** - Call only AFTER check_availability returns slots AND caller chooses one
-4. **end_call()** - Call only after saying goodbye
-
----
-
-## TOOL RESPONSE FORMATS
-
-### check_availability Response:
-
-**Expected JSON:**
-```json
-{{
-  "available_slots": [
-    {{"datetime": "2025-11-01T14:00:00+01:00", "friendly_format": "fredag 1 november kl 14:00"}}
-  ]
-}}
-```
-
-**How to handle:**
-- Extract "friendly_format" field for each slot
-- Present naturally: "Jag ser [slot1], [slot2], och [slot3]"
-- If empty array: "Tyvärr har Nils inga lediga tider just nu. Jag meddelar honom att ringa dig så ni kan hitta en tid."
-- If malformed: Treat as error (see ERROR HANDLING)
-
----
-
-## ERROR HANDLING
-
-### If check_availability fails or times out (>30s):
-Say: "Jag kunde inte kolla kalendern just nu. Jag meddelar Nils att ringa dig så ni kan boka en tid."
-Then continue to close the call.
-
-### If agree_on_meeting fails:
-Say: "Bokningen gick inte igenom tekniskt, men jag meddelar Nils att ni kom överens om [time]."
-
-### If save_caller_info fails:
-Continue silently (logged backend, not user-facing)
+2. **get_availability()** - Call when discussing meetings (uses pre-fetched data, instant response)
+3. **check_availability(start, end)** - ONLY if caller needs custom date range beyond 7 days
+4. **agree_on_meeting()** - Call after caller chooses a time
+5. **send_sms()** - Call when instructed to send booking confirmation via SMS
+6. **end_call()** - Call only after saying goodbye
 
 ---
 
@@ -341,34 +339,63 @@ Continue silently (logged backend, not user-facing)
 **Parameters:** name, company, phone, email, purpose, urgency
 **Pattern:** Call immediately (no preamble needed)
 
+### Tool: get_availability
+**Use when:** Discussing meetings (ALWAYS USE THIS FIRST)
+**Parameters:** None (uses pre-fetched 7-day data)
+**Pattern:** Call instantly, no waiting - data is already loaded
+
+**This is your PRIMARY tool for meeting booking!**
+
 ### Tool: check_availability
-**Use when:**
-- Caller asks "What is Nils doing (right now)?" or "Is Nils available?" → Call AUTOMATICALLY
-- Caller wants to schedule a meeting → Offer first, then call if they accept
-
-**Before calling:** Say "Jag kollar kalendern nu..."
-
+**Use when:** Caller needs dates beyond 7 days OR specific custom date range
 **Parameters:**
 - start_datetime (ISO format with timezone: "2025-11-01T09:00:00+01:00")
 - end_datetime (ISO format with timezone)
-- For "what is he doing NOW" queries: use current time to end of day
-- For meeting booking: use next 7 days
+
+**Before calling:** Say "Jag kollar kalendern nu..."
+
+**This is a FALLBACK tool - use get_availability() first!**
 
 ### Tool: agree_on_meeting
 **Use when:** Caller agrees to a specific time from available slots
 
 **Call after:**
-- check_availability returned slots
+- get_availability() or check_availability() returned slots
 - You presented times
 - Caller chose one
 
 **Parameters:** datetime, purpose, attendee_name
+
+### Tool: send_sms
+**Use when:** Need to send booking confirmation via SMS
+**Parameters:** None (uses caller's phone number from SIP)
+**Returns:** Confirmation message
 
 ### Tool: end_call
 **Use when:** Ready to end the call
 
 **Always say goodbye first:** "Tack för att du ringde. Ha en bra dag!"
 **Then call this tool** (no preamble)
+
+---
+
+## ERROR HANDLING
+
+### If get_availability returns no data:
+Fall back to check_availability() for the same date range.
+
+### If check_availability fails or times out (>30s):
+Say: "Jag kunde inte kolla kalendern just nu. Jag meddelar Nils att ringa dig så ni kan boka en tid."
+Then continue to close the call.
+
+### If agree_on_meeting fails:
+Say: "Bokningen gick inte igenom tekniskt, men jag meddelar Nils att ni kom överens om [time]."
+
+### If send_sms fails:
+Continue normally - SMS is optional, booking still goes through.
+
+### If save_caller_info fails:
+Continue silently (logged backend, not user-facing)
 
 ---
 
@@ -525,6 +552,123 @@ Then call end_call()
         logger.info(f"Added call details: {details}")
         return f"Detaljer tillagda: {details}"
 
+    async def fetch_availability_background(self):
+        """
+        BACKGROUND TASK: Silently fetch 7-day availability at call start.
+        This is NOT an AI tool - it runs automatically.
+        Stores results in self.availability_data for instant access.
+        """
+        try:
+            # Calculate 7-day window from now
+            swedish_tz = ZoneInfo("Europe/Stockholm")
+            now = datetime.now(swedish_tz)
+            end_date = now + timedelta(days=7)
+
+            start_datetime = now.isoformat()
+            end_datetime = end_date.isoformat()
+
+            logger.info(f"🔄 BACKGROUND: Fetching 7-day availability ({start_datetime} to {end_datetime})")
+
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "start_datetime": start_datetime,
+                    "end_datetime": end_datetime
+                }
+
+                start_time = time.time()
+                async with session.post(
+                    "https://snmnils.app.n8n.cloud/webhook/43b31bbd-3e3d-4510-91a1-512abd9bec19",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    elapsed = time.time() - start_time
+                    logger.info(f"🔄 BACKGROUND: Calendar response in {elapsed:.2f}s, status: {response.status}")
+
+                    if response.status == 200:
+                        data = await response.json()
+
+                        # Store raw data for AI to reference
+                        self.availability_data = data
+                        self.availability_fetched = True
+
+                        logger.info(f"✅ BACKGROUND: 7-day availability stored ({len(data) if isinstance(data, list) else 1} events)")
+                    else:
+                        logger.error(f"❌ BACKGROUND: Calendar fetch failed with status {response.status}")
+                        self.availability_fetched = False
+
+        except Exception as e:
+            logger.error(f"❌ BACKGROUND: Error fetching availability: {e}", exc_info=True)
+            self.availability_fetched = False
+
+    @function_tool
+    async def get_availability(self):
+        """
+        Get pre-fetched 7-day availability (already loaded at call start).
+        This is instant - no waiting required.
+
+        Returns:
+            Formatted availability information for the next 7 days
+        """
+        self.update_activity()
+
+        if not self.availability_fetched or self.availability_data is None:
+            logger.warning("Availability not yet fetched, waiting...")
+            # Wait a bit for background fetch to complete
+            await asyncio.sleep(1)
+
+            if not self.availability_fetched:
+                return "Kalendern kunde inte hämtas just nu."
+
+        data = self.availability_data
+
+        # Handle both formats: single dict or list of dicts
+        if isinstance(data, dict):
+            data = [data]
+
+        # Parse busy events to tell user what Nils is doing
+        if isinstance(data, list) and len(data) > 0:
+            events = []
+            for event in data[:5]:  # Limit to first 5 events
+                try:
+                    summary = event.get("summary", "Upptagen")
+                    start_str = event.get("start", {}).get("dateTime", "")
+                    end_str = event.get("end", {}).get("dateTime", "")
+
+                    if start_str and end_str:
+                        try:
+                            start_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                            end_dt = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+                        except (ValueError, AttributeError) as e:
+                            logger.error(f"Failed to parse datetime: {e}")
+                            continue
+
+                        # Format as Swedish time
+                        start_time = start_dt.strftime("%H:%M")
+                        end_time = end_dt.strftime("%H:%M")
+                        day_name = start_dt.strftime("%A")
+
+                        events.append(f"{day_name}: {summary} från {start_time} till {end_time}")
+                except Exception as e:
+                    logger.error(f"Error parsing event: {e}")
+                    continue
+
+            if events:
+                if len(events) == 1:
+                    result = f"Nils har {events[0]}. Efter det är kalendern ledig."
+                else:
+                    events_str = ", sedan ".join(events)
+                    result = f"Nils har {events_str}. Efter det är kalendern ledig."
+                logger.info(f"✅ Returning pre-fetched availability")
+                return result
+            else:
+                return "Nils kalender är helt ledig under den perioden."
+
+        elif isinstance(data, list) and len(data) == 0:
+            return "Nils kalender är helt ledig de kommande 7 dagarna."
+
+        else:
+            return "Kalendern kunde inte läsas."
+
     @function_tool
     async def check_availability(self, start_datetime: str, end_datetime: str):
         """
@@ -660,6 +804,58 @@ Then call end_call()
 
         return f"Möte bekräftat för {datetime}. Nils kommer ringa på detta nummer vid mötestiden."
 
+    @function_tool
+    async def send_sms(self):
+        """
+        Send SMS to the caller's phone number with booking information.
+        Uses the phone number already collected from the call.
+
+        Returns:
+            Confirmation message if SMS sent successfully
+        """
+        self.update_activity()
+
+        # Get phone number from call memory (already collected from SIP participant)
+        phone_number = self.call_memory.caller_phone
+
+        if not phone_number:
+            logger.error("Cannot send SMS - no phone number available")
+            return "Kunde inte skicka SMS - inget telefonnummer tillgängligt."
+
+        logger.info(f"📱 Sending SMS to: {phone_number}")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "phone_number": phone_number
+                }
+
+                logger.info(f"📤 Sending SMS webhook request...")
+                start_time = time.time()
+
+                async with session.post(
+                    "https://snmnils.app.n8n.cloud/webhook/10528303-442d-4759-a966-c496e6a12e3d",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    elapsed = time.time() - start_time
+                    logger.info(f"📥 SMS webhook response in {elapsed:.2f}s, status: {response.status}")
+
+                    if response.status == 200:
+                        logger.info(f"✅ SMS sent successfully to {phone_number}")
+                        return "SMS skickat till din telefon."
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ SMS webhook failed with status {response.status}: {error_text}")
+                        return "SMS kunde inte skickas, men informationen är sparad."
+
+        except asyncio.TimeoutError:
+            logger.error("⏱️ SMS webhook timed out")
+            return "SMS kunde inte skickas, men informationen är sparad."
+        except Exception as e:
+            logger.error(f"❌ Error sending SMS: {e}", exc_info=True)
+            return "SMS kunde inte skickas, men informationen är sparad."
+
     async def on_enter(self):
         """
         OFFICIAL LiveKit lifecycle hook - called when agent becomes active.
@@ -678,6 +874,11 @@ Then call end_call()
 
         logger.info(f"🎤 on_enter() called - agent is ready, sending greeting")
         logger.info(f"📝 Greeting message: {self.greeting_message}")
+
+        # Start background availability fetch (7-day window)
+        # This runs silently without blocking the greeting
+        asyncio.create_task(self.fetch_availability_background())
+        logger.info("🔄 Background availability fetch started")
 
         # Language-specific greeting instructions
         # CRITICAL: Instruct AI to say EXACTLY the configured greeting, word-for-word

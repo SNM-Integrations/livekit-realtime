@@ -1,8 +1,8 @@
-language: "Svenska"
-voice: "marin"
+language: "English"
+voice: "cedar"
 
 first_message: >
-  Hejsan, jag är Nils AI-assistent. Jag bokar möten, bestämmer tider och meddelar honom efter varje samtal. Varför ringde du idag?
+  Hi, this is Elsa from FinAI, how can I help you today?
 
 advanced:
   model_overrides:
