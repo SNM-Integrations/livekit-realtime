@@ -75,10 +75,13 @@ class LeadContext:
         self.notes = metadata.get("notes", None)
         self.form_timestamp = metadata.get("form_timestamp", None)
 
+        # Form submission answers - critical for contextual follow-ups
+        self.form_answers = metadata.get("form_answers", {})  # Dict of {question: answer}
+
         self.is_warm = self.source == "form"
         self.is_cold = self.source == "cold"
 
-        logger.info(f"LeadContext created: source={self.source}, name={self.lead_name}, company={self.company}, is_warm={self.is_warm}")
+        logger.info(f"LeadContext created: source={self.source}, name={self.lead_name}, company={self.company}, is_warm={self.is_warm}, form_answers={len(self.form_answers)} fields")
 
     def get_time_since_form(self) -> str:
         """Calculate time since form submission for warm leads"""
@@ -541,6 +544,11 @@ Följ alltid "en fråga i taget" principen."""
         }
         scenario_name = scenario_map.get(self.lead_context.source, "SCENARIO 1: TRUE COLD CALL")
 
+        logger.info(f"🎯 SCENARIO SELECTION:")
+        logger.info(f"  - Lead source: '{self.lead_context.source}'")
+        logger.info(f"  - Selected scenario: {scenario_name}")
+        logger.info(f"  - Form answers available: {len(self.lead_context.form_answers) > 0}")
+
         scenario_instruction = f"""
 # VIKTIGT: DETTA ÄR EN {scenario_name.upper()}
 
@@ -551,6 +559,10 @@ Detta är första kontakten. Var ärlig och direkt.
 
 """
         system_prompt = scenario_instruction + system_prompt
+
+        # DEBUG: Log the first part of the system prompt to verify scenario is included
+        logger.info(f"📋 SYSTEM PROMPT PREVIEW (first 500 chars):")
+        logger.info(system_prompt[:500])
 
         # Add dynamic context header for outbound calls
         if self.lead_context.source in ["cold", "form", "callback"]:
@@ -585,6 +597,13 @@ Detta är första kontakten. Var ärlig och direkt.
             # Only add referrer info for callback/form scenarios, NOT cold calls
             if self.lead_context.source in ["callback", "form"]:
                 context_header += f"- Refererad av: {self.lead_context.referrer}\n"
+
+            # Add form answers for form submissions - CRITICAL for contextual follow-ups
+            if self.lead_context.source == "form" and self.lead_context.form_answers:
+                context_header += "\n## FORMULÄRSVAR (Använd dessa för kontextuella follow-up frågor!):\n"
+                for question, answer in self.lead_context.form_answers.items():
+                    context_header += f"- Fråga: {question}\n  Svar: {answer}\n"
+                context_header += "\n**VIKTIG PÅMINNELSE:** Läs dessa svar och fråga kontextuella follow-ups baserat på vad de skrev!\n"
 
             context_header += "\n"
             system_prompt = context_header + system_prompt
@@ -812,12 +831,22 @@ async def entrypoint(ctx: JobContext):
     try:
         if ctx.job.metadata:
             lead_metadata = json.loads(ctx.job.metadata)
-            logger.info(f"📝 Parsed metadata: {lead_metadata}")
+            logger.info(f"📝 RAW METADATA RECEIVED:")
+            logger.info(f"   {json.dumps(lead_metadata, indent=2)}")
     except Exception as e:
         logger.warning(f"⚠️ Could not parse metadata: {e}")
 
     # Create lead context
     lead_context = LeadContext(lead_metadata)
+
+    # DEBUG: Log lead context details
+    logger.info(f"🔍 LEAD CONTEXT DEBUG:")
+    logger.info(f"  - Source: {lead_context.source}")
+    logger.info(f"  - Name: {lead_context.lead_name}")
+    logger.info(f"  - Company: {lead_context.company}")
+    logger.info(f"  - Form answers count: {len(lead_context.form_answers)}")
+    if lead_context.form_answers:
+        logger.info(f"  - Form answers: {lead_context.form_answers}")
 
     # Initialize conversation tracking with REAL-TIME file writing
     tracker = ConversationTracker()

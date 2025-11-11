@@ -33,6 +33,7 @@ COPY pyproject.toml ./
 RUN pip install --no-cache-dir .
 
 # Copy application files
+# Cache bust: v20251111-form-flow
 COPY src/agent.py ./
 COPY config/ ./config/
 
