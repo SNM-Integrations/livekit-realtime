@@ -1,4 +1,4 @@
-# Version: v20251112-no-ideal-solution-question
+# Version: v20251112-calendar-background-prefetch
 import asyncio
 import logging
 import os
@@ -6,7 +6,7 @@ import time
 import aiohttp
 import wave
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Any, Dict, List
 from enum import Enum
 from zoneinfo import ZoneInfo
@@ -111,44 +111,39 @@ class LeadContext:
 # CALENDAR AND BOOKING FUNCTION TOOLS
 # ============================================================================
 
-@function_tool
-async def check_availability(
-    context: RunContext,
-    start_datetime: str,
-    end_datetime: str
-) -> Dict[str, Any]:
+async def _fetch_calendar_data(start_datetime: str, end_datetime: str, silent: bool = False) -> Dict[str, Any]:
     """
-    Check calendar availability within a date/time range.
-
-    Format: ISO 8601 with timezone, e.g., "2025-10-15T09:00:00+02:00"
+    Internal function to fetch calendar data from webhook.
 
     Args:
-        start_datetime: Start of search window (e.g., "2025-10-15T09:00:00+02:00")
-        end_datetime: End of search window (e.g., "2025-10-15T17:00:00+02:00")
+        start_datetime: ISO 8601 datetime string
+        end_datetime: ISO 8601 datetime string
+        silent: If True, don't send periodic updates to user
 
     Returns:
-        Dictionary with available time slots
+        Dictionary with available_slots or error
     """
     global _calendar_cache, _session_ref
-
-    logger.info(f"📅 Checking availability from {start_datetime} to {end_datetime}")
 
     cache_key = f"{start_datetime}_{end_datetime}"
 
     # Check cache first
     if cache_key in _calendar_cache:
-        logger.info(f"💾 Using cached calendar data")
+        logger.info(f"💾 Using cached calendar data for {start_datetime} to {end_datetime}")
         return {
             "available_slots": _calendar_cache[cache_key],
             "cached": True
         }
 
-    # Periodic status updates during long webhook call
+    # Periodic updates (only if not silent)
     tool_completed = False
     update_count = 0
 
     async def send_periodic_updates():
         nonlocal update_count
+        if silent:
+            return
+
         await asyncio.sleep(5)
 
         while not tool_completed:
@@ -232,6 +227,75 @@ async def check_availability(
             await update_task
         except asyncio.CancelledError:
             pass
+
+
+async def prefetch_availability_background():
+    """
+    Silently prefetch 2 weeks of calendar availability in background on call start.
+    This ensures instant answers for booking requests within the next 2 weeks.
+    """
+    try:
+        now = datetime.now(ZoneInfo("Europe/Stockholm"))
+        two_weeks_later = now + timedelta(days=14)
+
+        start_str = now.isoformat()
+        end_str = two_weeks_later.isoformat()
+
+        logger.info(f"🔄 Background prefetch: Loading 2 weeks of availability ({start_str} to {end_str})")
+
+        result = await _fetch_calendar_data(start_str, end_str, silent=True)
+
+        if result.get("available_slots"):
+            logger.info(f"✅ Prefetch complete: {len(result['available_slots'])} slots cached")
+        else:
+            logger.warning(f"⚠️ Prefetch returned no slots or error: {result.get('error')}")
+
+    except Exception as e:
+        logger.error(f"❌ Error in background prefetch: {e}")
+
+
+@function_tool
+async def check_availability(
+    context: RunContext,
+    start_datetime: str,
+    end_datetime: str
+) -> Dict[str, Any]:
+    """
+    Check calendar availability within a date/time range.
+
+    Format: ISO 8601 with timezone, e.g., "2025-10-15T09:00:00+02:00"
+
+    Args:
+        start_datetime: Start of search window (e.g., "2025-10-15T09:00:00+02:00")
+        end_datetime: End of search window (e.g., "2025-10-15T17:00:00+02:00")
+
+    Returns:
+        Dictionary with available time slots
+    """
+    global _calendar_cache, _session_ref
+
+    logger.info(f"📅 User requested availability check: {start_datetime} to {end_datetime}")
+
+    cache_key = f"{start_datetime}_{end_datetime}"
+
+    # Check cache first - if found, return instantly without speaking
+    if cache_key in _calendar_cache:
+        logger.info(f"💾 INSTANT ANSWER - Using cached calendar data")
+        return {
+            "available_slots": _calendar_cache[cache_key],
+            "cached": True
+        }
+
+    # Not in cache - tell user we're checking, then fetch
+    logger.info(f"🔍 Not in cache - fetching from webhook")
+
+    if _session_ref:
+        await _session_ref.generate_reply(
+            instructions="Säg naturligt på svenska 'okej, låt mig kolla kalendern'"
+        )
+
+    # Fetch data (with periodic updates if it takes long)
+    return await _fetch_calendar_data(start_datetime, end_datetime, silent=False)
 
 
 @function_tool
@@ -1056,6 +1120,9 @@ async def entrypoint(ctx: JobContext):
     )
 
     logger.info("Session started - waiting for person to join room")
+
+    # Launch background prefetch of 2 weeks availability (runs silently while call proceeds)
+    asyncio.create_task(prefetch_availability_background())
 
     # Participant join detection - start timeout ONLY after person answers phone
     @ctx.room.on("participant_connected")
