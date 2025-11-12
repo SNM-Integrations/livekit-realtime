@@ -1,4 +1,4 @@
-# Version: v20251112-no-email-check-availability-only
+# Version: v20251112-brief-explanation-then-ask
 import asyncio
 import logging
 import os
