@@ -1,3 +1,4 @@
+# Version: v20251112-simple-greeting-fix
 import asyncio
 import logging
 import os
