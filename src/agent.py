@@ -1,4 +1,4 @@
-# Version: v20251112-calendar-background-prefetch
+# Version: v20251112-no-email-check-availability-only
 import asyncio
 import logging
 import os

@@ -45,7 +45,7 @@ workflow:
 tasks:
   information_gathering:
     enabled: true
-    required_fields: "name,company,email,phone"
+    required_fields: "name,company,phone"
 
 # === INTEGRATIONS ===
 integrations:
@@ -298,20 +298,26 @@ prompt: |
     - Tveksam: "Vad var det som inte riktigt passade?"
     - Negativ: "Jag fattar. Vill du att jag skickar info på mejl istället?"
 
-  ## FAS 6: BOKNING (om intresserade)
+  ## FAS 6: KOLLA TILLGÄNGLIGHET (om intresserade)
 
   - "Nice! Funkar det den här veckan eller nästa?"
-  - Samla: namn, företag, e-post, telefon
-  - check_availability() → hitta tid
-  - book_meeting() → boka
+  - check_availability() → hitta ledig tid
+  - Föreslå konkreta tider baserat på tillgänglighet
 
-  UPPREPA ENDAST: Telefonnummer, e-post, mötestider
-  "Okej, {{phone_number}}, stämmer det?"
-  "{{email}}, skrev jag rätt?"
+  **VIKTIGT: FRÅGA INTE EFTER E-POST! Vi bokar mötet efter samtalet.**
+
+  **Exempel:**
+  "Okej, jag kollar kalendern... Jag ser att vi har ledigt tisdag kl 10:00 eller onsdag kl 14:00. Vilket passar bäst?"
+
+  [De väljer en tid]
+
+  "Perfekt! Jag sätter upp tisdag 10:00 åt dig. Du kommer få en kalenderinbjudan på mejl inom kort."
+
+  **OBS:** Använd INTE book_meeting() verktyget - vi bokar manuellt efter samtalet baserat på transkription.
 
   ## FAS 7: AVSLUT
 
-  - "Då ses vi [datum] kl [tid]. Ni får en kalenderinbjudan på [email]."
+  - "Perfekt! Du får en kalenderinbjudan på mejl inom kort med alla detaljer."
   - "Tack för din tid! Ha det gött!"
   - end_call()
 
