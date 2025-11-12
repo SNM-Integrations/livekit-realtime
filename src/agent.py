@@ -587,7 +587,7 @@ Then call end_call()
             f"Say EXACTLY the following greeting word-for-word without changing anything: '{self.greeting_message}'. Then say nothing more and wait for the user to respond."
         )
 
-    async def send_greeting(self, trigger="manual"):
+    async def send_greeting(self, trigger="manual", delay: float = 0.0):
         if self.greeting_sent:
             logger.info(f"Greeting already sent, skipping trigger={trigger}")
             return
@@ -599,6 +599,9 @@ Then call end_call()
         async with self._greeting_lock:
             if self.greeting_sent:
                 return
+
+            if delay > 0:
+                await asyncio.sleep(delay)
 
             instruction = self._build_greeting_instruction()
             try:
@@ -1445,13 +1448,13 @@ async def entrypoint(ctx: JobContext):
         if isinstance(track, rtc.RemoteAudioTrack) and participant.kind in greeting_participant_kinds:
             logger.info("Remote audio track subscribed - triggering greeting and Scribe")
             asyncio.create_task(agent.start_scribe_stream(track))
-            asyncio.create_task(agent.send_greeting(trigger="track_subscribed"))
+            asyncio.create_task(agent.send_greeting(trigger="track_subscribed", delay=0.3))
 
     existing_track = has_active_audio_track()
     if existing_track:
         logger.info("Remote audio already active - triggering greeting immediately")
         asyncio.create_task(agent.start_scribe_stream(existing_track))
-        asyncio.create_task(agent.send_greeting(trigger="existing_audio_track"))
+        asyncio.create_task(agent.send_greeting(trigger="existing_audio_track", delay=0.3))
 
     # Store agent reference in session for event handlers
     session._agent_ref = agent
