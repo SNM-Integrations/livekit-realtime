@@ -603,10 +603,12 @@ Then call end_call()
             if delay > 0:
                 await asyncio.sleep(delay)
 
-            instruction = self._build_greeting_instruction()
             try:
                 logger.info(f"🎤 Sending greeting (trigger={trigger})")
-                speech_handle = await self.session_ref.generate_reply(instructions=instruction)
+                speech_handle = await self.session_ref.say(
+                    self.greeting_message,
+                    allow_interruptions=False,
+                )
                 await asyncio.wait_for(speech_handle.wait(), timeout=15.0)
                 self.greeting_sent = True
                 logger.info("✅ Greeting sent successfully")
