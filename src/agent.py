@@ -826,29 +826,43 @@ async def entrypoint(ctx: JobContext):
     # Load configuration
     config = load_config()
 
-    # Parse metadata for lead context
+    # CRITICAL: Cloud agents need to wait for room metadata to propagate
+    # Metadata doesn't appear instantly after room creation - poll with retry
     lead_metadata = {}
 
-    # DEBUG: Check ALL possible metadata sources
-    logger.info(f"🔍 METADATA DEBUG:")
-    logger.info(f"   ctx.job exists: {hasattr(ctx, 'job')}")
-    logger.info(f"   ctx.job.metadata: {ctx.job.metadata if hasattr(ctx, 'job') and ctx.job else 'NO JOB'}")
-    logger.info(f"   ctx.room.metadata: {ctx.room.metadata if hasattr(ctx.room, 'metadata') else 'NO ROOM METADATA'}")
-    logger.info(f"   ctx.room.name: {ctx.room.name}")
+    logger.info(f"🔍 POLLING FOR METADATA (cloud propagation delay)...")
+    max_attempts = 6  # 6 seconds total wait time
 
-    try:
+    for attempt in range(max_attempts):
+        await asyncio.sleep(1)  # Wait 1 second between attempts
+
+        # Try job metadata first (most reliable)
         if ctx.job.metadata:
-            lead_metadata = json.loads(ctx.job.metadata)
-            logger.info(f"📝 RAW METADATA FROM JOB:")
-            logger.info(f"   {json.dumps(lead_metadata, indent=2)}")
-        else:
-            logger.warning(f"⚠️ ctx.job.metadata is EMPTY - checking room metadata...")
-            if hasattr(ctx.room, 'metadata') and ctx.room.metadata:
+            try:
+                lead_metadata = json.loads(ctx.job.metadata)
+                logger.info(f"✅ Got metadata from job on attempt {attempt + 1}")
+                logger.info(f"📝 RAW METADATA FROM JOB:")
+                logger.info(f"   {json.dumps(lead_metadata, indent=2)}")
+                break
+            except:
+                pass
+
+        # Try room metadata (cloud deployment path)
+        if hasattr(ctx.room, 'metadata') and ctx.room.metadata:
+            try:
                 lead_metadata = json.loads(ctx.room.metadata)
+                logger.info(f"✅ Got metadata from room on attempt {attempt + 1}")
                 logger.info(f"📝 RAW METADATA FROM ROOM:")
                 logger.info(f"   {json.dumps(lead_metadata, indent=2)}")
-    except Exception as e:
-        logger.error(f"⚠️ Could not parse metadata: {e}")
+                break
+            except:
+                pass
+
+        if attempt < max_attempts - 1:
+            logger.info(f"⏳ No metadata yet, retrying... ({attempt + 1}/{max_attempts})")
+
+    if not lead_metadata:
+        logger.warning(f"⚠️ No metadata received after {max_attempts} attempts - defaulting to cold call")
 
     # Create lead context
     lead_context = LeadContext(lead_metadata)
