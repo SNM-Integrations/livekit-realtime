@@ -1,4 +1,4 @@
-# Version: v20251112-brief-explanation-then-ask
+# Version: v20251112-whisper-swedish-stt
 import asyncio
 import logging
 import os
@@ -993,23 +993,29 @@ async def entrypoint(ctx: JobContext):
     # Simple context hint is logged for debugging only, not used for transcription
     # ============================================================================
 
-    logger.info(f"🎯 Speech-to-Speech Pipeline (GPT Realtime)")
-    logger.info(f"   Model: {model_config.get('primary_model', 'gpt-4o-realtime-preview')}")
+    logger.info(f"🎯 Hybrid Pipeline (Whisper STT + GPT Realtime)")
+    logger.info(f"   STT: Whisper (Swedish language)")
+    logger.info(f"   Model: {model_config.get('primary_model', 'gpt-realtime')}")
     logger.info(f"   Voice: {voice_name} (Swedish-optimized)")
     logger.info(f"   Language: {language} ({language_code})")
-    logger.info(f"   Temperature: {model_config.get('temperature', 0.9)}")
-    logger.info(f"   Latency: ~300-500ms end-to-end (native speech-to-speech)")
+    logger.info(f"   Temperature: {model_config.get('temperature', 0.8)}")
+    logger.info(f"   Latency: ~500-800ms (Whisper transcription + Realtime response)")
     logger.info(f"   Modalities: audio + text (function tools enabled)")
-    logger.info(f"   Flow: SIP(8kHz) → GPT Realtime (internal VAD/STT/LLM/TTS) → SIP(8kHz)")
+    logger.info(f"   Flow: SIP(8kHz) → Whisper(STT sv) → GPT Realtime(LLM/TTS) → SIP(8kHz)")
+
+    # Use Whisper for Swedish transcription (better quality than GPT Realtime native)
+    whisper_stt = openai.STT(
+        model="whisper-1",
+        language="sv"  # Swedish language for better transcription
+    )
 
     session = AgentSession(
+        stt=whisper_stt,  # Use Whisper for transcription
         llm=openai.realtime.RealtimeModel(
-            model=model_config.get("primary_model", "gpt-4o-realtime-preview"),
+            model=model_config.get("primary_model", "gpt-realtime"),
             voice=voice_name,
             modalities=["audio", "text"],
-            temperature=model_config.get("temperature", 0.9)
-            # Note: GPT Realtime already transcribes audio internally
-            # No InputAudioTranscription needed - it adds cost and hurts quality
+            temperature=model_config.get("temperature", 0.8)
         )
     )
 
