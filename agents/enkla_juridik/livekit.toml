@@ -1,0 +1,8 @@
+[project]
+  subdomain = "finn-outbound-ebnrjj6k"
+
+# Agent ID will be assigned after first deployment with: lk agent create
+# Run: cd agents/enkla_juridik && lk agent create
+# Then update this file with the assigned ID
+[agent]
+  # id = "CA_xxxxx"  # Uncomment after first deployment

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(lk agent logs:*)",
+      "Bash(wmic process where:*)",
+      "Bash(lk agent:*)",
+      "Bash(python:*)",
+      "Bash(copy agent.py agent_backup.py)",
+      "Bash(schtasks:*)",
+      "Bash(cat:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(lk sip dispatch:*)",
+      "Bash(lk sip trunk:*)",
+      "Bash(lk sip inbound-trunk list:*)",
+      "Bash(lk sip:*)",
+      "Bash(git checkout:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
