@@ -44,16 +44,7 @@ async def create_outbound_call(lead_name: str, phone_number: str, lead_source: s
 
     metadata_json = json.dumps(metadata)
 
-    # 1. CREATE ROOM FIRST with metadata - this ensures agent can read ctx.room.metadata
-    # Previously the room was created implicitly without metadata
-    await lkapi.room.create_room(
-        api.CreateRoomRequest(
-            name=room_name,
-            metadata=metadata_json
-        )
-    )
-
-    # 2. Create agent dispatch - also pass metadata for redundancy
+    # Create agent dispatch with metadata
     dispatch_request = api.CreateAgentDispatchRequest(
         room=room_name,
         metadata=metadata_json
@@ -69,7 +60,7 @@ async def create_outbound_call(lead_name: str, phone_number: str, lead_source: s
 
     await lkapi.agent_dispatch.create_dispatch(dispatch_request)
 
-    # 3. Create SIP participant (make the call)
+    # Create SIP participant (make the call)
     await lkapi.sip.create_sip_participant(
         api.CreateSIPParticipantRequest(
             sip_trunk_id=SIP_TRUNK_ID,
@@ -78,6 +69,14 @@ async def create_outbound_call(lead_name: str, phone_number: str, lead_source: s
             participant_identity=f"sip_{lead_name.lower().replace(' ', '_')}",
             participant_name=lead_name,
             play_ringtone=True
+        )
+    )
+
+    # Update room metadata AFTER room exists (created by dispatch/SIP)
+    await lkapi.room.update_room_metadata(
+        api.UpdateRoomMetadataRequest(
+            room=room_name,
+            metadata=metadata_json
         )
     )
 
